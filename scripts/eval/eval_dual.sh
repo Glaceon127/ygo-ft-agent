@@ -1,5 +1,5 @@
 #!/bin/bash
-# 双卡组评估 wrapper —— 每次跑前自动重建 deck_eval，规避「卡组被清空」问题
+# 双卡组评估 wrapper
 #
 # 用法:
 #   bash scripts/eval/eval_dual.sh <ckpt1> <deck1> <ckpt2> <deck2> [episodes] [seed]
@@ -9,34 +9,32 @@
 #     checkpoints_xxx/u1404.flax_model FAIRY_TAIL_Magistus2 \
 #     checkpoints_ft9/13M_u488.flax_model FairyTail 1024 1
 #
-# 卡组名必须在 POOL 里（见下方），且对应文件存在于 assets/deck_eval/
+# 两个要点:
+#   1. --deck 传**目录**，--deck1/--deck2 传**卡组名**（不含 .ydk），
+#      传完整路径会让 C++ 层抛 std::bad_function_call
+#   2. 目录必须用 assets/deck_md —— 后来新建的 deck_eval 目录里，
+#      .ydk 会被清成 0 字节（原因未定位），导致 "Main deck must contain 40" 崩溃
 set -e
 
 AGENT_HOME=${AGENT_HOME:-/home/ygo/ygo-agent}
 SCRIPTS="$AGENT_HOME/scripts"
 ASSETS="$AGENT_HOME/assets"
-POOL="$ASSETS/deck_eval"
 SRC="$ASSETS/deck_md"
+POOL="$SRC"
 
-# 已知会导致 sort_extra_deck 抛错的卡组，不要放进池里
-EXCLUDED="Elfnote_2nd"
-
-# 只重建本次要用的两套 —— 目录里放多余卡组会被 ygoenv 加载并清空
-rebuild_deck_pool() {
+# 只做校验，不重建：deck_md 是训练/评估共用的稳定目录
+check_deck_pool() {
   local d1=$1 d2=$2
-  rm -rf "$POOL"
-  mkdir -p "$POOL"
   for name in "$d1" "$d2"; do
-    local src="$SRC/$name.ydk"
-    if [ ! -f "$src" ]; then
-      echo "[error] 源文件缺失: $src"; return 1
+    local f="$POOL/$name.ydk"
+    if [ ! -f "$f" ]; then
+      echo "[error] 卡组不存在: $f"; return 1
     fi
-    tr -d '\r' < "$src" > "$POOL/$name.ydk"
     local sz main
-    sz=$(stat -c %s "$POOL/$name.ydk")
-    main=$(sed -n '/#main/,/#extra/p' "$POOL/$name.ydk" | grep -cE '^[0-9]+$' || true)
+    sz=$(stat -c %s "$f")
+    main=$(sed -n '/#main/,/#extra/p' "$f" | grep -cE '^[0-9]+$' || true)
     if [ "$sz" -eq 0 ] || [ "$main" -lt 40 ]; then
-      echo "[error] 重建失败: $name (size=$sz main=$main)"; return 1
+      echo "[error] 卡组异常: $name (size=$sz main=$main)"; return 1
     fi
     echo "[deck] $name: size=$sz main=$main"
   done
@@ -51,7 +49,7 @@ main() {
   local episodes=${5:-1024}
   local seed=${6:-1}
 
-  rebuild_deck_pool "$deck1" "$deck2" || exit 1
+  check_deck_pool "$deck1" "$deck2" || exit 1
 
   # 校验权重
   for c in "$ckpt1" "$ckpt2"; do
@@ -65,7 +63,7 @@ main() {
   echo "[run] $deck1 vs $deck2   episodes=$episodes envs=$envs seed=$seed"
   cd "$SCRIPTS"
   timeout 3600 /home/ygo/venv/bin/python -u battle.py \
-    --deck        "../assets/deck_eval" \
+    --deck        "../assets/deck_md" \
     --deck1       "$deck1" \
     --deck2       "$deck2" \
     --checkpoint1 "$ckpt1" \

@@ -45,11 +45,14 @@ python battle.py \
 
 ### 两个不同卡组
 
-**关键**：`--deck` 指向**目录**，`--deck1` / `--deck2` 传**卡组名（不含 `.ydk`）**，不是路径。
+**关键两点**：
+
+1. `--deck` 指向**目录**，`--deck1` / `--deck2` 传**卡组名（不含 `.ydk`）**，不是路径
+2. 目录用 **`assets/deck_md`**（训练/评估共用，文件稳定）
 
 ```bash
 python battle.py \
-  --deck        assets/deck_eval \
+  --deck        assets/deck_md \
   --deck1       FAIRY_TAIL_Magistus2 \
   --deck2       FairyTail \
   --checkpoint1 weights/a.flax_model \
@@ -70,7 +73,17 @@ else:
     decks = {deck_name: deck}
 ```
 
-**因此目录里每一份 `.ydk` 都必须可加载** —— 有一份坏的（如 CRLF 行尾导致主卡组 0 张）会让整个评估在初始化时就抛异常。
+**因此目录里每一份 `.ydk` 都必须可加载** —— 有一份坏的（如 CRLF 行尾导致主卡组 0 张）会让整个评估在初始化时就抛异常。所以 `deck_md` 里已移除 `elfnote_2nd_raw.ydk`。
+
+> **不要用 `assets/deck_eval`**：该目录是后来新建的，实测其中 `.ydk` 会被清成 0 字节，导致 `RuntimeError: Main deck must contain at least 40 cards, found: 0`。原因未定位，用 `deck_md` 可完全规避。
+
+**更省事的方式**：用 `scripts/eval/eval_dual.sh`，它会校验卡组并自动用 `deck_md`：
+
+```bash
+bash scripts/eval/eval_dual.sh \
+  <ckpt1> FAIRY_TAIL_Magistus2 \
+  <ckpt2> FairyTail 1024 1
+```
 
 ### `--agent1-player` 与 `nan`
 
