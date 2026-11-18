@@ -184,8 +184,11 @@ ygo-ft-agent/
 │   ├── ygoinf_effects.py
 │   └── input-builder.ts    # srvpro2 插件的数据构造
 ├── assets/
-│   ├── code_list.txt       # 卡号表
-│   └── FairyTail.ydk       # 卡组
+│   ├── code_list.txt       # 卡号表（15019 行）
+│   ├── FairyTail.ydk       # 卡组（旧，无白枪管之前）
+│   └── FAIRY_TAIL_Magistus2.ydk  # 卡组（新）
+├── docs/
+│   └── deck-constraints.md # 卡组约束（换卡组前必读）
 ├── scripts/
 │   ├── launch/             # 训练启动脚本（可追溯每轮配置）
 │   └── eval/               # 评估脚本
@@ -197,6 +200,8 @@ ygo-ft-agent/
 ## 观测与奖励
 
 四张特征表的逐列布局、编码规则、奖励参数含义，见 **[OBSERVATION.md](OBSERVATION.md)**。
+
+**换卡组前必读 [docs/deck-constraints.md](docs/deck-constraints.md)**：行尾必须是 LF（CRLF 会让主卡组读成 0 张）、主卡组 ≥40、额外 ≤15 且只能是融合/同调/XYZ/连接、卡号必须在 `code_list.txt` / `cards.cdb` / `c*.lua` 三处齐全、`code_list.txt` 行号即 CardId 不可重排。
 
 一条关键约定：
 
