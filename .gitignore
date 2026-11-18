@@ -1,0 +1,71 @@
+# ---------- 权重与训练产物 ----------
+*.flax_model
+*.pt
+*.ptj
+*.msgpack
+checkpoints*/
+runs/
+logs/
+replays/
+tensorboard/
+events.out.tfevents.*
+
+# ---------- 编译产物 ----------
+build/
+.xmake/
+*.o
+*.so
+*.a
+*.obj
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# ---------- Node ----------
+node_modules/
+dist/
+
+# ---------- 第三方仓库（自行按 README 安装）----------
+srvpro*/
+ygocore/
+windbot*/
+neos-ts-main/
+YGOMobile*/
+mobile/
+MirrorForce-main/
+YGOAI-main/
+ygo-ai-main/
+edopro-core/
+ocgcore*
+
+# ---------- 数据与缓存 ----------
+assets/locale/
+assets/backup_*/
+*.cdb
+*.jsonl
+*.jsonl.gz
+*.yrp
+*.pcap
+*.etl
+wb_capture*
+
+# ---------- 工作日志（本仓库不收录）----------
+PROJECT_LOG*.md
+
+# ---------- 临时与备份 ----------
+*.bak
+*.bak_*
+*.orig
+*.rej
+*~
+_archive_*.zip
+_conv_*.txt
+_cons_*.txt
+scripts/--*
