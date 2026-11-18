@@ -4,6 +4,25 @@
 
 约束依据：`env/ygopro.h` 的 `read_decks`（L535-585）与 `sort_extra_deck`（L1440）。
 
+## 当前卡号版本
+
+| 资源 | 条目 | 最大卡号 | 最后更新 |
+|---|---|---|---|
+| `scripts/code_list.txt` | **15019** | 99995595 | 2026-11-16 |
+| `assets/locale/en/cards.cdb` | **15019** | 99995595 | 2026-11-18 |
+| `scripts/script/*.lua` | **13575** | 99995595 | — |
+
+**三者条目数与最大卡号一致**（`9999xxxx` 段是占位/特殊卡，真实卡号最高在 `9xxxxxxxx`）。
+
+对应 `--num-embeddings = 15019 + 30 = 15049`。
+
+```bash
+# 自检：三者是否同步
+wc -l < scripts/code_list.txt                     # 15019
+sqlite3 assets/locale/en/cards.cdb "SELECT COUNT(*) FROM texts;"   # 15019
+ls scripts/script/*.lua | wc -l                   # 13575（部分卡无脚本）
+```
+
 ## 一、文件格式
 
 ### 必须使用 LF 换行（硬性）
@@ -73,7 +92,7 @@ dos2unix input.ydk
 | `assets/locale/en/cards.cdb` | 卡的属性/效果分类 | `db_query_card` 抛异常 |
 | `scripts/script/c<code>.lua` | 效果实现 | `script_reader_callback` 抛异常 |
 
-**因此近年新卡通常用不了**，除非同步升级这三项资源。
+**因此要使用新卡，需同步升级这三项资源**（`code_list.txt` 末尾追加、`cards.cdb` 补行、`c<code>.lua` 补脚本）。
 
 ## 四、`code_list.txt` 的顺序不可变（硬性）
 
