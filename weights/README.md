@@ -33,15 +33,63 @@ JAX_PLATFORMS=cuda \
 
 ## 评估
 
+### 同一个卡组
+
 ```bash
 python battle.py \
-  --checkpoint1 weights/a.flax_model --deck1 assets/FAIRY_TAIL_Magistus2.ydk \
-  --checkpoint2 weights/b.flax_model --deck2 assets/FairyTail.ydk \
+  --checkpoint1 weights/a.flax_model \
+  --checkpoint2 weights/b.flax_model \
+  --deck assets/FAIRY_TAIL_Magistus2.ydk \
+  --num-episodes 1024 --num-envs 32
+```
+
+### 两个不同卡组
+
+**关键**：`--deck` 指向**目录**，`--deck1` / `--deck2` 传**卡组名（不含 `.ydk`）**，不是路径。
+
+```bash
+python battle.py \
+  --deck        assets/deck_eval \
+  --deck1       FAIRY_TAIL_Magistus2 \
+  --deck2       FairyTail \
+  --checkpoint1 weights/a.flax_model \
+  --checkpoint2 weights/b.flax_model \
   --agent1-player 0 \
   --num-episodes 1024 --num-envs 32
 ```
 
-`--deck1` / `--deck2` 让两侧用不同卡组；`--agent1-player 0`（或 1）固定座位，否则每局翻转会导致卡组跟着换人。
+`battle.py` 的参数注释写的是 “the **deck name** for the first player”，传完整路径会让 C++ 层抛 `std::bad_function_call`。
+
+加载机制（`ygoai/utils.py:30-36`）：
+
+```python
+if deck_fp.is_dir():
+    decks = {f.stem: str(f) for f in deck_fp.glob("*.ydk")}   # 目录下全部卡组注册进 C++
+    deck_name = 'random'                                       # 不指定时每局随机抽
+else:
+    decks = {deck_name: deck}
+```
+
+**因此目录里每一份 `.ydk` 都必须可加载** —— 有一份坏的（如 CRLF 行尾导致主卡组 0 张）会让整个评估在初始化时就抛异常。
+
+### `--agent1-player` 与 `nan`
+
+| 取值 | 行为 |
+|---|---|
+| 不传（默认 `-1`） | 每局翻转座位，`--deck1/--deck2` 会跟着换人 |
+| `0` / `1` | 固定座位，`--deck1` 恒定由 agent1 使用 |
+
+**固定座位时 Payoff 矩阵有一半是 `nan`**，因为另一侧没有对局数据（`0/0`），属正常现象，不影响整体 `win_rate`。
+
+### 训练期评估的局数
+
+`--local-eval-episodes N` 是**每个 actor 线程**的局数，实际总局数 = `N × num_actor_threads`。
+
+```
+--local-eval-episodes 8 --num-actor-threads 8  →  64 局
+```
+
+所以训练日志里的 `eval_win_rate` 是 `k/64`，不是 `k/8`。
 
 ## 校验
 

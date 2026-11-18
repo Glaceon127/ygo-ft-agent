@@ -185,8 +185,9 @@ ygo-ft-agent/
 │   └── input-builder.ts    # srvpro2 插件的数据构造
 ├── assets/
 │   ├── code_list.txt       # 卡号表（15019 行）
-│   ├── FairyTail.ydk       # 卡组（旧，无白枪管之前）
-│   └── FAIRY_TAIL_Magistus2.ydk  # 卡组（新）
+│   ├── FairyTail.ydk       # 卡组（旧）
+│   ├── FAIRY_TAIL_Magistus2.ydk  # 卡组（新）
+│   └── deck_eval/          # 评估用卡组目录（8 套，供 --deck 指向）
 ├── docs/
 │   └── deck-constraints.md # 卡组约束（换卡组前必读）
 ├── scripts/
