@@ -12,6 +12,12 @@ from types import SimpleNamespace
 from typing import List, NamedTuple, Optional, Literal
 from functools import partial
 
+# Keep the launcher's GPU flags when adding the CPU thread defaults.
+os.environ["XLA_FLAGS"] = (
+    f'{os.environ.get("XLA_FLAGS", "")} '
+    '--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1'
+).strip()
+
 import ygoenv
 import flax
 import jax
@@ -24,6 +30,7 @@ from rich.pretty import pprint
 
 from ygoai.utils import init_ygopro, load_embeddings
 from ygoai.rl.utils import RecordEpisodeStatistics, EnvPreprocess
+from ygoai.rl.env import ChainEffectObservation
 from ygoai.rl.shaping import RewardShaping
 from ygoai.rl.ckpt import ModelCheckpoint, sync_to_gcs, zip_files
 from ygoai.rl.jax.agent import RNNAgent, ModelArgs
@@ -32,9 +39,6 @@ from ygoai.rl.jax.eval import evaluate, battle
 from ygoai.rl.jax.switch import truncated_gae_sep as gae_sep_switch
 from ygoai.rl.jax import clipped_surrogate_pg_loss, mse_loss, entropy_loss, simple_policy_loss, \
     ach_loss, policy_gradient_loss, vtrace, vtrace_sep, truncated_gae, truncated_gae_sep
-
-
-os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
 
 
 @dataclass
@@ -118,6 +122,10 @@ class Args:
     shaping_tail_grave_bonus: float = 0.07
     """TAIL 进我方墓地（里程碑 index 2）的权重。"""
     shaping_ms_scale: float = 0.0
+    shaping_sf_consumed_bonus: float = 0.0
+    """简易融合产物在非结束阶段被用掉（当融合素材/解放）的奖励，每次。"""
+    shaping_sf_destroyed_penalty: float = 0.0
+    """简易融合产物拖到结束阶段被规则破坏的惩罚，每次（正数表示扣多少）。"""
     shaping_negated_activate_penalty: float = 0.0
     """bad_action=5（发动已被无效的卡）的惩罚，默认 0。"""
     shaping_terminal_scale: float = 1.0
@@ -128,6 +136,10 @@ class Args:
     """威凯特当融合素材的事件奖励（每次），默认 0。"""
     shaping_turn_task_weight: float = 0.0
     """阶段0：回合交卷奖励权重，内部按训练进度退火到 0。"""
+    shaping_turn_task_anneal_timesteps: Optional[int] = None
+    """global step budget for turn-task shaping decay, defaulting to total_timesteps"""
+    shaping_turn_task_main: float = 1.0
+    """回合交卷主奖励分值（终端留场 且 无坏动作），默认 1.0。"""
     """展开链里程碑总倍率（0=关闭）。内部按 0.10/0.08/0.07/0.20/0.05 分配"""
 
     total_timesteps: int = 50000000000
@@ -259,6 +271,7 @@ def make_env(args, seed, num_envs, num_threads, mode='self', thread_affinity_off
         thread_affinity_offset = -1
     if thread_affinity_offset >= 0:
         print("Binding to thread offset", thread_affinity_offset)
+    chain_effect_features = args.m1.uses_chain_effect_slots or (eval and args.m2.uses_chain_effect_slots)
     envs = ygoenv.make(
         task_id=args.env_id,
         env_type="gymnasium",
@@ -275,14 +288,23 @@ def make_env(args, seed, num_envs, num_threads, mode='self', thread_affinity_off
         play_mode=mode,
         timeout=args.timeout,
         oppo_info=False,
+        battle_features=args.m1.battle_features or (eval and args.m2.battle_features),
+        **({"chain_effect_probe": True} if chain_effect_features else {}),
     )
     envs.num_envs = num_envs
+    if chain_effect_features:
+        envs = ChainEffectObservation(envs)
     if not eval and args.shaping:
         # 每个 actor 线程各有一份 wrapper，_tt_steps 只累计本线程的 env 步数。
         # 用全局 total_timesteps 会让退火进度只走到 1/n_actors，权重永远不降。
         n_actors = max(1, int(args.num_actor_threads) *
                        max(1, len(args.actor_device_ids)))
-        turn_anneal_total = max(1, int(args.total_timesteps) // n_actors)
+        anneal_steps = args.shaping_turn_task_anneal_timesteps
+        if anneal_steps is None:
+            anneal_steps = args.total_timesteps
+        elif anneal_steps <= 0:
+            raise ValueError("shaping_turn_task_anneal_timesteps must be positive")
+        turn_anneal_total = max(1, int(anneal_steps) // n_actors)
         envs = RewardShaping(
             envs,
             lp_coef=args.shaping_lp_coef,
@@ -303,20 +325,25 @@ def make_env(args, seed, num_envs, num_threads, mode='self', thread_affinity_off
             opp_material_bonus=args.shaping_opp_material_bonus,
             tail_chain_bonus=args.shaping_tail_chain_bonus,
             terminal_scale=args.shaping_terminal_scale,
+            sf_consumed_bonus=args.shaping_sf_consumed_bonus,
+            sf_destroyed_penalty=args.shaping_sf_destroyed_penalty,
             negated_activate_penalty=args.shaping_negated_activate_penalty,
             turn_task_weight=args.shaping_turn_task_weight,
+            turn_task_main=args.shaping_turn_task_main,
             total_timesteps=turn_anneal_total,
         )
         print(
             "[shaping] lp=%.4g mon=%.4g ht_summon=%.4g ht_self=%.4g "
             "self_attack=%.4g ht_correct=%.4g term=%.4g ms=%.4g "
-            "turn=%.4g(anneal_total=%d) wic=%.4g tsc=%.3g nbad=%.4g "
-            "msS=%.3g msT=%.3g millS=%.3g millT=%.3g millF=%.3g omm=%.3g tch=%.3g" % (
+            "turn=%.4g(main=%.3g,anneal_total=%d) wic=%.4g tsc=%.3g nbad=%.4g "
+            "msS=%.3g msT=%.3g millS=%.3g millT=%.3g millF=%.3g omm=%.3g tch=%.3g "
+            "sfC=%.3g sfD=%.3g" % (
                 args.shaping_lp_coef, args.shaping_mon_coef,
                 args.shaping_ht_summon_penalty, args.shaping_ht_self_penalty,
                 args.shaping_self_attack_penalty, args.shaping_ht_correct_bonus,
                 args.shaping_term_coef, args.shaping_ms_scale,
-                args.shaping_turn_task_weight, turn_anneal_total,
+                args.shaping_turn_task_weight, args.shaping_turn_task_main,
+                turn_anneal_total,
                 args.shaping_wicat_convert_bonus,
                 args.shaping_terminal_scale,
                 args.shaping_negated_activate_penalty,
@@ -326,7 +353,9 @@ def make_env(args, seed, num_envs, num_threads, mode='self', thread_affinity_off
                 args.shaping_mill_tail_bonus,
                 args.shaping_mill_field_penalty,
                 args.shaping_opp_material_bonus,
-                args.shaping_tail_chain_bonus),
+                args.shaping_tail_chain_bonus,
+                args.shaping_sf_consumed_bonus,
+                args.shaping_sf_destroyed_penalty),
             flush=True,
         )
     return envs
@@ -349,6 +378,7 @@ def create_agent(args, eval=False):
             embedding_shape=args.num_embeddings,
             dtype=jnp.bfloat16 if args.bfloat16 else jnp.float32,
             param_dtype=jnp.float32,
+            ash_g_ids=args.m2.ash_g_ids(args.code_list_file),
             **asdict(args.m2),
         )
     else:
@@ -358,45 +388,17 @@ def create_agent(args, eval=False):
             param_dtype=jnp.float32,
             switch=args.switch,
             freeze_id=args.freeze_id,
+            ash_g_ids=args.m1.ash_g_ids(args.code_list_file),
             **asdict(args.m1),
         )
 
 
-def load_checkpoint_into(target, path, extra_prefix="BeliefEncoder"):
-    """把 checkpoint 读进 target 参数树，允许 target 多出一个信念子树。
+import ygoai.rl.jax.ckpt as _ckpt_mod
 
-    当用「无信念」权重初始化「有信念」模型时，checkpoint 里没有
-    ``BeliefEncoder_0``。flax 的 ``from_bytes`` 要求 key 完全一致，会直接报
-    ``ValueError: ... contains keys {'BeliefEncoder_0'} which are not present``。
-    这里先裁掉该子树加载共享部分，再把信念层保留为随机初始化。
-    """
-    with open(path, "rb") as f:
-        raw = f.read()
 
-    params = target["params"] if "params" in target else target
-    extra_keys = [k for k in params if str(k).startswith(extra_prefix)]
-    if not extra_keys:
-        return flax.serialization.from_bytes(target, raw)
-
-    state = flax.serialization.msgpack_restore(raw)
-    ckpt_params = state.get("params", state)
-    if any(str(k).startswith(extra_prefix) for k in ckpt_params):
-        # checkpoint 本身带信念层，直接加载
-        return flax.serialization.from_bytes(target, raw)
-
-    base = dict(target)
-    base_params = {k: v for k, v in params.items()
-                   if not str(k).startswith(extra_prefix)}
-    base["params"] = base_params
-    loaded = flax.serialization.from_bytes(base, raw)
-
-    merged_params = dict(params)
-    merged_params.update(loaded["params"])
-    out = dict(target)
-    out["params"] = merged_params
-    if "batch_stats" in target and "batch_stats" in loaded:
-        out["batch_stats"] = loaded["batch_stats"]
-    return out
+def load_checkpoint_into(target, path, extra_prefix=None):
+    """宽松加载：missing/形状不符的键保留初始化值（见 ygoai.rl.jax.ckpt）。"""
+    return _ckpt_mod.load_checkpoint_into(target, path)
 
 
 def resolve_eval_checkpoints(spec: str) -> list:
@@ -1036,7 +1038,13 @@ def main():
     if args.eval_checkpoint:
         eval_agent = create_agent(args, eval=True)
         eval_rstate = eval_agent.init_rnn_state(1)
-        eval_skeleton = eval_agent.init(init_key, sample_obs, eval_rstate)
+        eval_sample_obs = sample_obs
+        if args.m2.uses_chain_effect_slots and "chain_effect_" not in sample_obs:
+            eval_sample_obs = {
+                **sample_obs,
+                "chain_effect_": jnp.zeros(sample_obs["chain_"].shape[:-1], dtype=jnp.uint8),
+            }
+        eval_skeleton = eval_agent.init(init_key, eval_sample_obs, eval_rstate)
         eval_variables = []
         for ckpt_path in resolve_eval_checkpoints(args.eval_checkpoint):
             eval_variables.append(

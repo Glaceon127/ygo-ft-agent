@@ -55,8 +55,8 @@ TT_TERM_IDS = (638, 11847)      # 讲述者 / 编写者
 TT_KAGUYA_ID = 13145            # 妖精传姬-辉夜
 TT_X11_TEMPORARY = 2            # 简易融合使用中
 TT_K_CAP = 2
-TT_K_UNIT = 0.10
-TT_K_MAX = 0.40      # K 项合计上限 = 主奖励 1.0 的 40%，不盖过主奖励
+TT_K_UNIT = 0.05
+TT_K_MAX = 0.20      # K 项合计上限 = 主奖励 1.0 的 20%（2 项 × 最多 2 个 × 0.05）
 
 
 def _field_milestones(cards: np.ndarray) -> np.ndarray:
@@ -139,7 +139,10 @@ class RewardShaping(gym.Wrapper):
         tail_chain_bonus: float = 0.0,
         terminal_scale: float = 1.0,
         negated_activate_penalty: float = 0.0,
+        sf_consumed_bonus: float = 0.0,
+        sf_destroyed_penalty: float = 0.0,
         turn_task_weight: float = 0.0,
+        turn_task_main: float = 1.0,
         total_timesteps: int = 0,
     ) -> None:
         super().__init__(env)
@@ -166,7 +169,7 @@ class RewardShaping(gym.Wrapper):
                 self._term_lut = None
         # 展开链里程碑：每局各触发一次，done 时清零
         self.ms_scale = float(ms_scale)
-        # 威凯特当融合素材：C++ 上报 wicat_convert（威凯特送墓后 <=5 步内终端登场）
+        # 威凯特当融合素材：C++ 上报 wicat_convert（威凯特送墓后 <=2 步内终端登场）
         self.wicat_convert_bonus = float(wicat_convert_bonus)
         # 用对方场上的怪兽当融合素材（事件级，C++ 上报 opp_fusion_mat）
         self.opp_material_bonus = float(opp_material_bonus)
@@ -176,6 +179,10 @@ class RewardShaping(gym.Wrapper):
         self.terminal_scale = float(terminal_scale)
         # bad=5：发动已被无效/禁止的卡（默认 0 = 不惩罚）
         self.negated_activate_penalty = float(negated_activate_penalty)
+        # 简易融合产物：非结束阶段被当素材/解放用掉 +X/次；
+        # 拖到结束阶段被规则破坏 -X/次（由 C++ info:sf_consumed/_destroyed 驱动）
+        self.sf_consumed_bonus = float(sf_consumed_bonus)
+        self.sf_destroyed_penalty = float(sf_destroyed_penalty)
         # 事件级：本步把 START / TAIL 从卡组送进墓地
         self.mill_start_bonus = float(mill_start_bonus)
         self.mill_tail_bonus = float(mill_tail_bonus)
@@ -201,6 +208,8 @@ class RewardShaping(gym.Wrapper):
         self._prev = None
         # 阶段0：回合交卷
         self.turn_task_weight = float(turn_task_weight)
+        # 交卷主奖励分值（终端留场 且 无坏动作）；默认 1.0，可降到 0.5 等
+        self.turn_task_main = float(turn_task_main)
         self.total_timesteps = int(total_timesteps)
         self._tt_steps = 0
         self._tt_prev_turn = None
@@ -410,6 +419,24 @@ class RewardShaping(gym.Wrapper):
                     rewards = rewards + (_ofm.astype(np.float32)
                                          * self.opp_material_bonus)
 
+        # 简易融合产物路径：当素材消耗 +X/次，结束阶段自毁 -X/次
+        if ((self.sf_consumed_bonus or self.sf_destroyed_penalty)
+                and isinstance(infos, dict)):
+            for _sfk, _sfcoef in (("sf_consumed", self.sf_consumed_bonus),
+                                  ("sf_destroyed", -self.sf_destroyed_penalty)):
+                if not _sfcoef:
+                    continue
+                _sfv = infos.get(_sfk)
+                if _sfv is None:
+                    continue
+                _sfa = np.asarray(_sfv, dtype=np.int32).reshape(-1)
+                n_sf = rewards.shape[0]
+                if _sfa.size == 1 and n_sf > 1:
+                    _sfa = np.full(n_sf, int(_sfa[0]), dtype=np.int32)
+                if _sfa.size == n_sf:
+                    rewards = rewards + (_sfa.astype(np.float32)
+                                         * float(_sfcoef))
+
         # 堆墓事件：本步把 START / TAIL 从卡组送进墓地（info:mill_id_a/_b）
         if ((self.mill_start_bonus or self.mill_tail_bonus
              or self.mill_field_penalty) and isinstance(infos, dict)):
@@ -528,25 +555,25 @@ class RewardShaping(gym.Wrapper):
             is_term = (ids == TT_TERM_IDS[0]) | (ids == TT_TERM_IDS[1])
             h1 = (on_mz & mine & is_term & (x11 != TT_X11_TEMPORARY)).any(axis=1)
             k1 = (on_mz & mine & (ids == TT_KAGUYA_ID)).sum(axis=1)
-            h2 = self._tt_sf_destroyed == 0
+            h2 = self._tt_sf_destroyed == 0     # 仅统计，不再参与计分
             h3 = self._tt_bad == 0
             k2 = self._tt_kag_effect
             # K 项独立计分：不再依赖主奖励是否通过，否则 main==0 的回合
             # （约 80% 的边界）永远拿不到辉夜分，K 等于没有。
-            # 上限：两项合计 <= TT_K_MAX(0.4)，即主奖励 1.0 的 40%。
-            # H2 失败的回合不给 K，避免「自毁 -1 + 辉夜 +0.4」互相抵消。
+            # 上限：两项合计 <= TT_K_MAX(0.20)，即主奖励 1.0 的 20%。
             k = TT_K_UNIT * (np.minimum(k1, TT_K_CAP) +
                              np.minimum(k2, TT_K_CAP))
             k = np.minimum(k, TT_K_MAX).astype(np.float32)
 
-            main = np.where(h1 & h2 & h3, 1.0,
-                            np.where(~h2, -1.0, 0.0)).astype(np.float32)
-            bonus = np.where(main < 0, 0.0, k).astype(np.float32)
+            # 简易融合自毁（h2）已改由事件级 sf_destroyed_penalty 扣分，
+            # 交卷只判「终端留场(h1)」与「无坏动作(h3)」。
+            main = np.where(h1 & h3, self.turn_task_main, 0.0).astype(np.float32)
+            bonus = k
             out = np.where(boundary, (main + bonus) * w, 0.0).astype(np.float32)
 
             b = boundary.astype(bool)
             self._tt_stats["pass"] += int((b & (main > 0)).sum())
-            self._tt_stats["fail_h2"] += int((b & (main < 0)).sum())
+            self._tt_stats["fail_h2"] += int((b & (self._tt_sf_destroyed > 0)).sum())
             self._tt_stats["neutral"] += int((b & (main == 0)).sum())
             self._tt_stats["k_sum"] += float(bonus[b].sum())
             self._tt_stats["h1"] += int((b & h1).sum())

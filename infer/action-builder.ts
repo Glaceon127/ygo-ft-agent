@@ -71,13 +71,14 @@ function cardLocation(
   location: number | undefined,
   sequence: number | undefined,
   myDuelPos: number,
+  subsequence = 0,
 ) {
   return {
     controller: ctrl(controller ?? 0, myDuelPos),
-    location: loc(location),
+    location: loc((location ?? 0) & 0x7f),
     sequence: sequence ?? 0,
     // models.py: overlay 索引从 0 起，非 overlay 为 -1
-    overlay_sequence: -1,
+    overlay_sequence: (location ?? 0) & 128 ? subsequence : -1,
   };
 }
 
@@ -176,8 +177,7 @@ export function buildActionMsg(
     }
     return {
       msg_type: 'select_chain',
-      // specialCount > 0 表示存在强制项
-      forced: (msg.specialCount ?? 0) > 0,
+      forced: msg.chains.some(c => c.forced !== 0),
       chains,
     };
   }
@@ -188,7 +188,8 @@ export function buildActionMsg(
   // 由客户端最终 prepareResponse(IndexResponse(i)...) 生成。
   if (msg instanceof YGOProMsgSelectCard) {
     const cards = (msg.cards ?? []).map((c, i) => ({
-      location: cardLocation(c.controller, c.location, c.sequence, myDuelPos),
+      code: c.code ?? 0,
+      location: cardLocation(c.controller, c.location, c.sequence, myDuelPos, c.subsequence),
       response: i,
     }));
     return {
@@ -203,9 +204,9 @@ export function buildActionMsg(
 
   if (msg instanceof YGOProMsgSelectTribute) {
     const cards = (msg.cards ?? []).map((c, i) => ({
+      code: c.code ?? 0,
       location: cardLocation(c.controller, c.location, c.sequence, myDuelPos),
-      // ygopro-msg-encode 只给 releaseParam，没有 level；models.py 需要 level
-      level: (c as unknown as { level?: number }).level ?? 0,
+      level: c.releaseParam,
       response: i,
     }));
     return {
@@ -225,16 +226,17 @@ export function buildActionMsg(
     // 模型选出来再编码回去必然被 core 判 RETRY。这里和 select_card 一样统一用「卡索引」，
     // 由客户端 prepareResponse(IndexResponse(i)...) 生成真正的响应。
     const conv = (c: Record<string, number>, i: number, isMust: boolean) => ({
+      code: c.code ?? 0,
       location: cardLocation(c.controller, c.location, c.sequence, myDuelPos),
       // CardInfo.opParam 是 core 给的等级/数值参数
-      level1: c.opParam ?? 0,
-      level2: 0,
+      level1: c.opParam & 255,
+      level2: c.opParam >>> 16,
       // must 卡不参与选择，response 固定 0（与 features.py 一致）
       response: isMust ? 0 : i,
     });
     return {
       msg_type: 'select_sum',
-      overflow: false,
+      overflow: msg.mode !== 0,
       level_sum: msg.sumVal ?? 0,
       min: msg.min ?? 0,
       max: msg.max ?? 0,
@@ -250,7 +252,8 @@ export function buildActionMsg(
     // u32 取 4 字节时缓冲不够 → 恒为 0，所有候选项 response 全相同，
     // 模型无论选谁最后都只能发出 index 0。这里统一用卡索引。
     const conv = (c: Record<string, number>, i: number) => ({
-      location: cardLocation(c.controller, c.location, c.sequence, myDuelPos),
+      code: c.code ?? 0,
+      location: cardLocation(c.controller, c.location, c.sequence, myDuelPos, c.subsequence),
       response: i,
     });
     return {
@@ -278,10 +281,7 @@ export function buildActionMsg(
   }
 
   if (msg instanceof YGOProMsgSelectPlace) {
-    const places = (msg.getSelectablePlaces() ?? []).slice(
-      0,
-      Math.max(1, msg.count ?? 1),
-    ).map((p) => ({
+    const places = (msg.getSelectablePlaces() ?? []).map((p) => ({
       controller: ctrl(p.player, myDuelPos),
       location: loc(p.location),
       sequence: p.sequence,

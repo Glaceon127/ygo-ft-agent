@@ -3,6 +3,8 @@
 
 // clang-format off
 #include <algorithm>
+#include "battle_features.h"
+#include "public_hand.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -33,11 +35,15 @@
 #include "ygopro-core/common.h"
 #include "ygopro-core/card_data.h"
 #include "ygopro-core/duel.h"
+#include "ygopro-core/card.h"
+#include "ygopro-core/field.h"
+#include "ygopro-core/group.h"
 #include "ygopro-core/ocgapi.h"
 
 // clang-format on
 
 namespace ygopro {
+int g_draw_source_index(intptr_t handle, int player, int count, int index, uint32_t code);
 
 // ===== 外部对手（WindBot 桥接）=====
 // 默认 false，不影响训练。开启后，非 AI 玩家的回合不调用内置 bot，
@@ -1051,6 +1057,7 @@ public:
 
   int spec_index_ = 0;
   CardId cid_ = 0;
+  uint32_t src_code_ = 0;  // 该动作在消息里的真实卡号（仅选卡类消息）
   int msg_ = 0;
   // 规则上合法、但被环境策略屏蔽的候选（例如无触发 tag 且必亏的攻击）。
   // 保留它只是为了不改动 legal_actions_ 的索引，观测里会把 msg 写成 0，
@@ -1371,8 +1378,19 @@ inline Card db_query_card(const SQLite::Database &db, CardCode code) {
   return card;
 }
 
+// Match YGOMobile DataManager::ReadDB. The normal Black Luster Soldier is
+// rule-named for the ritual card despite having an adjacent print number.
+inline CardCode rule_name_for(CardCode code, CardCode alias, uint32_t type) {
+  constexpr CardCode artwork_range = 20;
+  const CardCode distance = code >= alias ? code - alias : alias - code;
+  return (code == 5405695 || (!(type & TYPE_TOKEN) && distance >= artwork_range))
+             ? alias : 0;
+}
+
 inline card_data db_query_card_data(const SQLite::Database &db, CardCode code) {
-  SQLite::Statement query(db, "SELECT * FROM datas WHERE id=?");
+  SQLite::Statement query(db,
+      "SELECT c.*, base.alias AS base_alias, base.type AS base_type "
+      "FROM datas AS c LEFT JOIN datas AS base ON base.id = c.alias WHERE c.id = ?");
   query.bind(1, code);
   query.executeStep();
   card_data card;
@@ -1382,6 +1400,14 @@ inline card_data db_query_card_data(const SQLite::Database &db, CardCode code) {
   int64_t setcode_raw = query.getColumn("setcode").getInt64();
   write_setcode(card.setcode, static_cast<uint64_t>(setcode_raw));
   card.type = query.getColumn("type");
+  card.rule_code = rule_name_for(code, card.alias, card.type);
+  if (card.rule_code) {
+    card.alias = 0;  // load this printed card's own script
+  } else if (card.alias && !(card.type & TYPE_TOKEN)) {
+    // An alternate artwork uses its base print's script and inherits its rule name.
+    card.rule_code = rule_name_for(card.alias, query.getColumn("base_alias"),
+                                   query.getColumn("base_type"));
+  }
   uint32_t level_ = query.getColumn("level");
   card.level = level_ & 0xff;
   card.lscale = (level_ >> 24) & 0xff;
@@ -1763,7 +1789,9 @@ public:
                     "max_cards"_.Bind(80), "n_history_actions"_.Bind(16),
                     "record"_.Bind(false), "async_reset"_.Bind(false),
                     "greedy_reward"_.Bind(true), "timeout"_.Bind(600),
-                    "oppo_info"_.Bind(false), "max_steps"_.Bind(1000));
+                    "oppo_info"_.Bind(false), "battle_features"_.Bind(false),
+                    "chain_effect_probe"_.Bind(false), "chain_target_probe"_.Bind(false),
+                    "max_steps"_.Bind(1000));
   }
   template <typename Config>
   static decltype(auto) StateSpec(const Config &conf) {
@@ -1771,11 +1799,22 @@ public:
     return MakeDict(
         "obs:cards_"_.Bind(Spec<uint8_t>({conf["max_cards"_] * 2, 73})),
         "obs:global_"_.Bind(Spec<uint8_t>({33})),
+        // 连锁内容：(8 环 × 13 列) —— 0 link_no, 1 ctrl(0=me,1=opp),
+        // 2-3 code, 4-7 category(32bit LE), 8 negated, 9 loc, 10 seq,
+        // 11-12 effects(16bit LE)。训练侧由 ChainEncoder 编码，默认零初始化
+        // 输出层，因此热启动旧权重时前向完全等价。
+        "obs:chain_"_.Bind(Spec<uint8_t>({8, 13})),
+        "obs:battle_"_.Bind(Spec<float>({conf["max_options"_], 24}, {-1.0f, 1.0f})),
         "obs:actions_"_.Bind(
             Spec<uint8_t>({conf["max_options"_], n_action_feats})),
         "obs:h_actions_"_.Bind(
             Spec<uint8_t>({conf["n_history_actions"_], n_action_feats + 2})),
         "obs:mask_"_.Bind(Spec<uint8_t>({conf["max_cards"_] * 2, 14})),
+        "info:negation_preview"_.Bind(Spec<uint8_t>({conf["max_options"_]}, {0, 2})),
+        "info:opening_ecclesia"_.Bind(Spec<int>({}, {0,1})),
+        "info:droll_event"_.Bind(Spec<int>({conf["max_options"_], 3})),
+        "info:chain_effect_slots"_.Bind(Spec<uint8_t>({8}, {0, 14})),
+        "info:chain_target_context"_.Bind(Spec<uint8_t>({4})),
         "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})),
         "info:to_play"_.Bind(Spec<int>({}, {0, 1})),
         "info:is_selfplay"_.Bind(Spec<int>({}, {0, 1})),
@@ -1784,6 +1823,7 @@ public:
         "info:deck"_.Bind(Spec<int>({2})),
         // 单步「错误动作」标记：0=无 1=手坑通召 2=手坑自伤 3=自残攻击 4=手坑正确连锁
         // 只走 info 通道，不进 obs、不改 ret_reward_，因此不影响 done 判定与权重形状。
+        "info:g_draws"_.Bind(Spec<int>({2,4}, {0,255})),
         "info:bad_action"_.Bind(Spec<int>({}, {0, 4})),
         // 阶段0：辉夜效果发动次数 / 简易融合产物被消耗 / 被自毁（本步计数）
         "info:kaguya_effect"_.Bind(Spec<int>({}, {0, 16})),
@@ -1838,6 +1878,7 @@ public:
         "info:rename_hit"_.Bind(Spec<int>({}, {0, 31})),
         "info:rename_clr"_.Bind(Spec<int>({}, {0, 31})),
         "info:obs_gyoku"_.Bind(Spec<int>({}, {0, 31})),
+        "info:obs_spec_fill"_.Bind(Spec<int>({}, {0, 255})),
         "info:opp_fusion_mat"_.Bind(Spec<int>({}, {0, 7})),
         "info:tail_chain"_.Bind(Spec<int>({}, {0, 7})),
         "info:gyoku_id"_.Bind(Spec<int>({}, {0, 65535})),
@@ -1867,7 +1908,34 @@ public:
         "info:pair_start_cand"_.Bind(Spec<int>({}, {0, 2})),
         "info:pair_start_pick"_.Bind(Spec<int>({}, {0, 2})),
         "info:pair_tail_cand"_.Bind(Spec<int>({}, {0, 2})),
-        "info:pair_tail_pick"_.Bind(Spec<int>({}, {0, 2}))
+        "info:pair_tail_pick"_.Bind(Spec<int>({}, {0, 2})),
+        "info:pair_kg_cand"_.Bind(Spec<int>({}, {0, 4})),
+        "info:pair_fd_cand"_.Bind(Spec<int>({}, {0, 4})),
+        "info:pair_mg_cand"_.Bind(Spec<int>({}, {0, 4})),
+        "info:pair_sn_cand"_.Bind(Spec<int>({}, {0, 4})),
+        "info:nz_win"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_act"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_win_1"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_win_2"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_win_3"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_act_1"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_act_2"_.Bind(Spec<int>({}, {0, 255})),
+        "info:nz_act_3"_.Bind(Spec<int>({}, {0, 255})),
+        "info:hist_11"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_22"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_12"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_xx"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_p1"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_p2"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_p3"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_p4p"_.Bind(Spec<int>({}, {0, 64})),
+        "info:hist_unk"_.Bind(Spec<int>({}, {0, 64})),
+        "info:w12_all_win"_.Bind(Spec<int>({}, {0, 64})),
+        "info:w12_all_p1"_.Bind(Spec<int>({}, {0, 64})),
+        "info:w12_all_p2"_.Bind(Spec<int>({}, {0, 64})),
+        "info:w12_m7_win"_.Bind(Spec<int>({}, {0, 64})),
+        "info:w12_m7_p1"_.Bind(Spec<int>({}, {0, 64})),
+        "info:w12_m7_p2"_.Bind(Spec<int>({}, {0, 64}))
       );
   }
   template <typename Config>
@@ -2000,6 +2068,13 @@ protected:
     int id = 0;               // 单调递增的连锁 id
   };
   std::vector<ChainEntry> chain_stack_;
+  bool update_negation_source(ChainEntry& entry, uint32_t from, uint32_t to) {
+    if (entry.loc != LOCATION_MZONE ||
+        (from & 0xffffffu) != (uint32_t(entry.controler) | (LOCATION_MZONE << 8) | (uint32_t(entry.seq) << 16)))
+      return false;
+    entry.seq = (to & 0xffffu) == (from & 0xffffu) ? ((to >> 16) & 255) : 74;
+    return true;
+  }
   int chain_seq_ = 0;
   int rename_pending_chain_ = 0;
   std::map<int, std::string> pending_rename_;
@@ -2017,6 +2092,7 @@ protected:
   int ha_p_2_ = 0;
 
   std::unordered_set<std::string> revealed_;
+  std::array<PublicHand, 2> public_hands_;
 
   // multi select
   int ms_idx_ = -1;
@@ -2028,6 +2104,9 @@ protected:
   int pending_attacker_ctrl_ = -1;   // 攻击者坐标（用于判定时实时查攻）
   int pending_attacker_loc_ = -1;
   int pending_attacker_seq_ = -1;
+  // Public MSG_ATTACK source for target reselection, independent of reward bookkeeping.
+  static constexpr uint32_t kBattleSourceMask = 0x00ffffff;
+  uint32_t battle_attack_source_ = 0;
   int atk_tgt_total_ = 0;   // 攻击表侧攻击目标次数
   int atk_tgt_zero_ = 0;    // 其中 atk==0（看不到有效攻击力）
   int def_tgt_total_ = 0;   // 攻击表侧守备目标次数
@@ -2070,6 +2149,7 @@ public:
   // step return
   float ret_reward_ = 0;
   // 0=无 1=手坑通召 2=手坑自伤 3=自残攻击 4=手坑正确连锁 5=发动已被无效的卡
+  std::array<std::array<int,4>,2> g_draws_{};
   int bad_action_ = 0;
   uint8_t pending_attacker_tags_ = 0;  // 本次攻击者的 tag，供目标选择阶段豁免
 
@@ -2082,7 +2162,7 @@ public:
   int kaguya_effect_ = 0;                  // 本步辉夜效果发动次数
   int sf_consumed_ = 0;                    // 本步：flag 卡在非 END 阶段离场（正确利用）
   int sf_destroyed_ = 0;                   // 本步：flag 卡在 END 阶段离场（自毁）
-  // 威凯特当融合素材：mzone->grave 之后 <=5 步内，同一方终端 extra->mzone
+  // 威凯特当融合素材：mzone->grave 之后 <=2 步内，同一方终端 extra->mzone
   int wicat_convert_ = 0;                  // 本步完成次数
   long wicat_grave_step_ = -1;             // 威凯特最后一次送墓的 step
   PlayerId actor_ = 0;                     // 本步行动方（step 入口的 to_play_）
@@ -2124,8 +2204,8 @@ public:
   bool tail_fusion_active_ = false;      // 正在结算 TAIL 的融合效果
   int opp_fusion_mat_ = 0;               // 本步：用对方怪兽当融合素材的次数
   int mill_tail_turn_ = -1;              // 堆墓选中 TAIL 的回合号
-  int tail_chain_ = 0;                   // 本步：同回合链路达成（每局一次）
-  bool tail_chain_done_ = false;
+  int tail_chain_ = 0;                   // 本步：同回合链路达成（每局一次，按玩家分）
+  bool tail_chain_done_[2] = {false, false};  // 每方各一次，避免对手吃掉名额
   int tail_fusion_ctrl_ = 0;
   int kaguya_desc_[4] = {0, 0, 0, 0};  // 辉夜 desc 的低位桶（调试）
   int tail_equip_ = 0;   // TAIL 从墓地装到魔陷区（e3 生效）
@@ -2134,6 +2214,7 @@ public:
   int mill_id_a_ = 0;
   int mill_id_b_ = 0;
   int mill_cnt_ = 0;
+  int mill_mine_cnt_ = 0;   // 本步「我方」DECK -> GRAVE 计数（奖励用，最多 2 张）
   // 堆墓选择（从卡组选妖精传姬卡）的候选统计
   int mill_cand_sel_ = 0;
   int mill_cand_size_ = 0;
@@ -2144,6 +2225,20 @@ public:
   bool pend_pair_ = false;       // 已发生一次卡组选卡，等 DECK->GRAVE 确认是堆墓
   bool pend_s_ = false;
   bool pend_t_ = false;
+  bool pend_kg_ = false;   // 窗口含辉夜 86937530
+  bool pend_fd_ = false;   // 窗口含舞踏会场地 56725612
+  bool pend_mg_ = false;   // 窗口含玛奇莉勒 19144622
+  bool pend_sn_ = false;   // 窗口含白雪 55623480
+  int pair_kg_cand_ = 0;   // 含辉夜的堆墓窗口数（条件选取率分母）
+  int pair_fd_cand_ = 0;
+  int pair_mg_cand_ = 0;
+  int pair_sn_cand_ = 0;
+  // 连锁对抗窗口：连锁上有对方环，且我方有可发动的无效/禁制类效果
+  int nz_win_ = 0, nz_act_ = 0;
+  int nz_win_by_len_[4] = {0, 0, 0, 0};
+  int nz_act_by_len_[4] = {0, 0, 0, 0};
+  bool nz_pend_ = false;
+  int nz_pend_len_ = 0;
   int pair_start_cand_ = 0;
   int pair_start_pick_ = 0;
   int pair_tail_cand_ = 0;
@@ -2155,7 +2250,57 @@ public:
   int mill_cand_dsel_ = 0;    // 只要求「全在卡组」
   int mill_cand_dsize_ = 0;
   int mill_cand_one_ = 0;     // 妖精传姬选择里 size==1 的次数
+  // 卡组选卡直方图（口径：全部候选在卡组 + 至少一张妖精传姬）
+  int hist_11_ = 0;           // (min,max) = (1,1)
+  int hist_22_ = 0;           // (min,max) = (2,2)
+  int hist_12_ = 0;           // (min,max) = (1,2)
+  int hist_xx_ = 0;           // 其他 (min,max)
+  int hist_p1_ = 0;           // 候选池 == 1
+  int hist_p2_ = 0;           // 候选池 == 2
+  int hist_p3_ = 0;           // 候选池 == 3
+  int hist_p4p_ = 0;          // 候选池 >= 4
+  int hist_unk_ = 0;          // 候选里存在无法解析的卡号
+  int w12_all_win_ = 0;       // (min,max)==(1,2) 且 size>=2 的窗口
+  int w12_all_p1_ = 0;        // 其中只选 1 张
+  int w12_all_p2_ = 0;        // 其中选 2 张
+  int w12_m7_win_ = 0;        // 含 m7 区候选（威凯特素材取除）的 (1,2) 窗口
+  int w12_m7_p1_ = 0;
+  int w12_m7_p2_ = 0;
+  bool w12_pend_ = false;
+  bool w12_m7_ = false;
   int ret_win_reason_ = 0;
+  std::vector<uint32_t> last_sel_codes_;  // 最近一次 MSG_SELECT_CARD 的真实卡号
+  std::map<std::string, uint32_t> cur_win_code_;  // 当前选择窗口 spec→真实卡号
+  int cur_win_player_ = -1;  // 当前窗口归属玩家
+  int obs_spec_fill_ = 0;  // 观测里仍需 spec 反查的候选数（应为 0）
+
+  // 用消息真实卡号覆盖 action 的占位 cid（spec_to_card_id 对卡组位置会取错卡）
+  void set_action_cid_from_code(const std::string &spec, uint32_t code) {
+    if (code == 0) return;
+    CardId cid = c_get_card_id(code);
+    if (cid == 0) return;
+    bool hit = false;
+    for (auto &la : legal_actions_) {
+      if (!la.finish_ && la.spec_ == spec) {
+        la.cid_ = cid;
+        la.src_code_ = code;
+        hit = true;
+        break;
+      }
+    }
+    if (!hit && std::getenv("YGO_CIDMISS")) {
+      static int miss_n = 0;
+      if (miss_n++ < 15) {
+        fmt::print(stderr, "[CIDMISS] msg={} spec='{}' code={} nact={}\n",
+                   int(msg_), spec, code, int(legal_actions_.size()));
+        for (auto &la : legal_actions_) {
+          fmt::print(stderr, "    act spec='{}' cid={} finish={}\n", la.spec_,
+                     int(la.cid_), la.finish_);
+        }
+      }
+    }
+  }
+  std::vector<std::string> last_sel_specs_;  // 与之对应的 spec
 
   YGOProEnvImpl();
 
@@ -2234,6 +2379,8 @@ public:
   }
 
   void reset() {
+    opening_ecclesia_stage_=0; outside_draw_adds_ = {}; search_additions_.clear(); resolving_search_=0;
+    g_draws_ = {};
     // clock_t start = clock();
 
     if (random_mode()) {
@@ -2293,7 +2440,7 @@ public:
     opp_fusion_mat_ = 0;
     tail_chain_ = 0;
     mill_tail_turn_ = -1;
-    tail_chain_done_ = false;
+    for (int i = 0; i < 2; ++i) tail_chain_done_[i] = false;
     rename_win_ = 0;
     rename_hit_ = 0;
     rename_clr_ = 0;
@@ -2310,6 +2457,7 @@ public:
     mill_id_a_ = 0;
     mill_id_b_ = 0;
     mill_cnt_ = 0;
+    mill_mine_cnt_ = 0;
     mill_cand_sel_ = 0;
     mill_cand_size_ = 0;
     mill_cand_start_ = 0;
@@ -2317,6 +2465,23 @@ public:
     mill_cand_dsel_ = 0;
     mill_cand_dsize_ = 0;
     mill_cand_one_ = 0;
+    hist_11_ = 0;
+    hist_22_ = 0;
+    hist_12_ = 0;
+    hist_xx_ = 0;
+    hist_p1_ = 0;
+    hist_p2_ = 0;
+    hist_p3_ = 0;
+    hist_p4p_ = 0;
+    hist_unk_ = 0;
+    w12_all_win_ = 0;
+    w12_all_p1_ = 0;
+    w12_all_p2_ = 0;
+    w12_m7_win_ = 0;
+    w12_m7_p1_ = 0;
+    w12_m7_p2_ = 0;
+    w12_pend_ = false;
+    w12_m7_ = false;
     mill_any_sel_ = 0;
     mill_any_size_ = 0;
     mill_any_start_ = 0;
@@ -2330,7 +2495,16 @@ public:
     pair_start_pick_ = 0;
     pair_tail_cand_ = 0;
     pair_tail_pick_ = 0;
+    pair_kg_cand_ = 0;
+    pair_fd_cand_ = 0;
+    pair_mg_cand_ = 0;
+    pair_sn_cand_ = 0;
     actor_ = 0;
+    nz_win_ = 0;
+    nz_act_ = 0;
+    nz_pend_ = false;
+    nz_pend_len_ = 0;
+    for (int _i = 0; _i < 4; ++_i) { nz_win_by_len_[_i] = 0; nz_act_by_len_[_i] = 0; }
     chain_stack_.clear();
     chain_forced_ = false;
     spe_count_ = 0;
@@ -2339,6 +2513,7 @@ public:
     pending_attacker_ctrl_ = -1;
     pending_attacker_loc_ = -1;
     pending_attacker_seq_ = -1;
+    battle_attack_source_ = 0;
     atk_tgt_total_ = 0;
     atk_tgt_zero_ = 0;
     def_tgt_total_ = 0;
@@ -2354,6 +2529,8 @@ public:
         }
     ms_masked_specs_.clear();
 
+    public_hands_ = {};
+    revealed_.clear();
     history_actions_1_.Zero();
     history_actions_2_.Zero();
     ha_p_1_ = 0;
@@ -2555,8 +2732,38 @@ public:
           legal_actions_.push_back(la);
         }
       }
+      // 门控实验开关：YGO_M7_FORCE=1 只取 1 个素材；=2 强制取满 2 个。
+      // 仅作用于 m7 区（威凯特素材取除）的 (1,2) 窗口，默认关闭。
+      const char *m7f_env = getenv("YGO_M7_FORCE");
+      const char *m7fp_env = getenv("YGO_M7_FORCE_PLAYER");
+      const int m7fp = (m7fp_env != nullptr) ? std::atoi(m7fp_env) : -1;
+      const bool m7_side_ok = (m7fp < 0 || static_cast<int>(to_play_) == m7fp);
+      const int m7force = (w12_pend_ && w12_m7_ && m7f_env != nullptr &&
+                           m7_side_ok)
+                              ? std::atoi(m7f_env)
+                              : 0;
+      if (m7force == 1 && ms_idx_ == ms_max_ - 1 && ms_idx_ >= ms_min_) {
+        legal_actions_.clear();
+        legal_actions_.push_back(LegalAction::finish());
+      } else if (m7force == 2 && ms_idx_ == ms_max_ - 1 &&
+                 ms_idx_ >= ms_min_) {
+        for (auto it = legal_actions_.begin(); it != legal_actions_.end();) {
+          if (it->finish_) {
+            it = legal_actions_.erase(it);
+          } else {
+            ++it;
+          }
+        }
+        if (legal_actions_.empty()) {
+          legal_actions_.push_back(LegalAction::finish());
+        }
+      }
       if (ms_idx_ == ms_max_ - 1) {
-        if (ms_idx_ >= ms_min_) {
+        if (ms_idx_ >= ms_min_ && !legal_actions_.empty() &&
+            legal_actions_.back().finish_) {
+          legal_actions_.pop_back();
+        }
+        if (ms_idx_ >= ms_min_ && (m7force != 2 || legal_actions_.empty())) {
           legal_actions_.push_back(LegalAction::finish());
         }
         callback_ = [this](int idx) {
@@ -2710,6 +2917,16 @@ public:
       }
     }
     if (finish) {
+      if (w12_pend_) {
+        const int k = static_cast<int>(ms_r_idxs_.size());
+        if (k == 1) ++w12_all_p1_;
+        else if (k == 2) ++w12_all_p2_;
+        if (w12_m7_) {
+          if (k == 1) ++w12_m7_p1_;
+          else if (k == 2) ++w12_m7_p2_;
+        }
+        w12_pend_ = false;
+      }
       ms_idx_ = -1;
       resp_buf_[0] = ms_r_idxs_.size();
       for (int i = 0; i < ms_r_idxs_.size(); ++i) {
@@ -2947,6 +3164,18 @@ public:
   }
 
   void step(int idx) {
+    if (idx>=0 && idx<int(legal_actions_.size()) && opening_ecclesia_stage_>=0) {
+      const auto& a=legal_actions_[idx];
+      if (a.act_!=ActionAct::None && a.act_!=ActionAct::Cancel) {
+        const bool name=a.cid_==c_get_card_id(55273560);
+        if (!opening_ecclesia_stage_ && to_play_==tp_ && name && a.act_==ActionAct::Summon)
+          opening_ecclesia_stage_=1;
+        else if (opening_ecclesia_stage_==1 && to_play_==tp_ && name && a.act_==ActionAct::Activate)
+          opening_ecclesia_stage_=2;
+        else opening_ecclesia_stage_=-1;
+      }
+    }
+    g_draws_ = {};
     g_waiting_external = false;
     kaguya_effect_ = 0;      // 阶段0：本步计数清零
     sf_consumed_ = 0;
@@ -2999,6 +3228,7 @@ public:
     mill_id_a_ = 0;
     mill_id_b_ = 0;
     mill_cnt_ = 0;
+    mill_mine_cnt_ = 0;
     mill_cand_sel_ = 0;
     mill_cand_size_ = 0;
     mill_cand_start_ = 0;
@@ -3006,6 +3236,15 @@ public:
     mill_cand_dsel_ = 0;
     mill_cand_dsize_ = 0;
     mill_cand_one_ = 0;
+    hist_11_ = 0;
+    hist_22_ = 0;
+    hist_12_ = 0;
+    hist_xx_ = 0;
+    hist_p1_ = 0;
+    hist_p2_ = 0;
+    hist_p3_ = 0;
+    hist_p4p_ = 0;
+    hist_unk_ = 0;
     mill_any_sel_ = 0;
     mill_any_size_ = 0;
     mill_any_start_ = 0;
@@ -3016,6 +3255,10 @@ public:
     pair_start_pick_ = 0;
     pair_tail_cand_ = 0;
     pair_tail_pick_ = 0;
+    pair_kg_cand_ = 0;
+    pair_fd_cand_ = 0;
+    pair_mg_cand_ = 0;
+    pair_sn_cand_ = 0;
     actor_ = to_play_;       // 本步行动方，用于判定「我方」
     // 简易融合发动：以「当前选中动作」为准（比 MSG_CHAINING 更可靠）
     if (idx >= 0 && idx < static_cast<int>(legal_actions_.size())) {
@@ -3027,6 +3270,74 @@ public:
         }
       }
     }
+    if (nz_pend_ && idx >= 0 && idx < static_cast<int>(legal_actions_.size()) &&
+        legal_actions_[idx].act_ == ActionAct::Activate) {
+      ++nz_act_;
+      ++nz_act_by_len_[nz_pend_len_];
+    }
+    nz_pend_ = false;
+    // ---- 攻击目标决策 dump（YGO_ATKDUMP=路径，仅观测）----
+    bool _atk_win = false;
+    if (attack_target_pending_ && msg_ == MSG_SELECT_CARD) {
+      for (const auto &_la : legal_actions_) {
+        if (!_la.spec_.empty() && _la.spec_[0] == 'o') { _atk_win = true; break; }
+      }
+    }
+    if (_atk_win) {
+      const char *_ad = std::getenv("YGO_ATKDUMP");
+      if (_ad) {
+        std::vector<Card> _field;
+        for (int _pi = 0; _pi < 2; ++_pi) {
+          for (auto _loc : {LOCATION_MZONE, LOCATION_SZONE}) {
+            auto _cs = get_cards_in_location(_pi, _loc);
+            for (auto &_c : _cs) _field.push_back(_c);
+          }
+        }
+        FILE *_fp = std::fopen(_ad, "a");
+        if (_fp) {
+          int _aatk_live = -1;
+          if (pending_attacker_ctrl_ >= 0 && pending_attacker_loc_ >= 0) {
+            auto _acs = get_cards_in_location(pending_attacker_ctrl_,
+                                              pending_attacker_loc_);
+            for (auto &_c : _acs) {
+              if ((int)_c.sequence_ == pending_attacker_seq_) {
+                _aatk_live = _c.attack_;
+                break;
+              }
+            }
+          }
+          std::fprintf(_fp, "A %d %d %d %zu msg=%d actrl=%d aloc=%d aseq=%d alive=%d", turn_count_,
+                       pending_attacker_atk_, idx, legal_actions_.size(), (int)msg_,
+                       (int)pending_attacker_ctrl_, (int)pending_attacker_loc_,
+                       (int)pending_attacker_seq_, _aatk_live);
+          for (size_t _i = 0; _i < legal_actions_.size(); ++_i) {
+            const auto &_la = legal_actions_[_i];
+            auto _it = g_id_to_code.find(_la.cid_);
+            uint32_t _code = (_it == g_id_to_code.end()) ? 0 : _it->second;
+            const Card *_live = nullptr;
+            for (const auto &_c : _field) {
+              if (_c.code_ != _code) continue;
+              if (_la.spec_.empty()) { _live = &_c; break; }
+              if (_c.get_spec(false) == _la.spec_ || _c.get_spec(true) == _la.spec_) {
+                _live = &_c;
+                break;
+              }
+            }
+            if (_live) {
+              std::fprintf(_fp, " %u:%d:%d:%d:%d:%d:%d:%s", _code, _live->attack_,
+                           _live->defense_, (int)_live->position_,
+                           (int)_live->level(), (int)(_live->type() & 0xffff),
+                           (int)_live->controler_, _la.spec_.c_str());
+            } else {
+              std::fprintf(_fp, " %u:-1:-1:-1:-1:-1:-1:%s", _code, _la.spec_.c_str());
+            }
+          }
+          std::fprintf(_fp, "\n");
+          std::fclose(_fp);
+        }
+      }
+    }
+
     _detect_bad_action(idx);
     callback_(idx);
     update_history_actions(to_play_, legal_actions_[idx]);
@@ -3151,11 +3462,36 @@ public:
            typename SpecToTArray<typename YGOProEnvSpec::StateSpec::Values>::Type>;
 
   void WriteState(State &state) {
+    for (int i=0; i<max_options(); ++i)
+      for (int j=0; j<24; ++j) state["obs:battle_"_](i,j)=0;
     float reward = ret_reward_;
     int win_reason = ret_win_reason_;
     int n_options = legal_actions_.size();
+    state["info:opening_ecclesia"_] = int(opening_ecclesia_stage_==2);
+    droll_event(state["info:droll_event"_]);
+    negation_preview(state["info:negation_preview"_]);
+    auto &effect_slots = state["info:chain_effect_slots"_];
+    for (int i = 0; i < 8; ++i) effect_slots(i) = 0;
+    if (spec_.config["chain_effect_probe"_] && n_options > 0) {
+      for (size_t i = 0; i < std::min<size_t>(8, chain_stack_.size()); ++i) {
+        const auto &entry = chain_stack_[i];
+        const uint32_t index = entry.desc & 0xf;
+        // Zero means padding or no unambiguous card-local description.
+        // Match the activated card before treating the low bits as a slot.
+        if (entry.desc >= DESCRIPTION_LIMIT && (entry.desc >> 4) == entry.code &&
+            index < 14 && c_get_card_id(entry.code) != 0) {
+          effect_slots(i) = static_cast<uint8_t>(index + 1);
+        }
+      }
+    }
+    auto &target_context = state["info:chain_target_context"_];
+    for (int i = 0; i < 4; ++i) target_context(i) = 0;
+    if (spec_.config["chain_target_probe"_] && n_options > 0) {
+      _set_chain_target_context(target_context);
+    }
     state["reward"_] = reward;
     state["info:to_play"_] = int(to_play_);
+    for (int s=0; s<2; ++s) for (int g=0; g<4; ++g) state["info:g_draws"_](s,g) = g_draws_[s][g];
     state["info:bad_action"_] = bad_action_;
     state["info:kaguya_effect"_] = kaguya_effect_;
     state["info:sf_consumed"_] = sf_consumed_;
@@ -3209,6 +3545,7 @@ public:
     state["info:rename_hit"_] = rename_hit_;
     state["info:rename_clr"_] = rename_clr_;
     state["info:obs_gyoku"_] = obs_gyoku_;
+    state["info:obs_spec_fill"_] = obs_spec_fill_;
     state["info:opp_fusion_mat"_] = opp_fusion_mat_;
     state["info:tail_chain"_] = tail_chain_;
     state["info:gyoku_id"_] = static_cast<int>(c_get_card_id(19144623u));
@@ -3239,6 +3576,33 @@ public:
     state["info:pair_start_pick"_] = pair_start_pick_;
     state["info:pair_tail_cand"_] = pair_tail_cand_;
     state["info:pair_tail_pick"_] = pair_tail_pick_;
+    state["info:pair_kg_cand"_] = pair_kg_cand_;
+    state["info:pair_fd_cand"_] = pair_fd_cand_;
+    state["info:pair_mg_cand"_] = pair_mg_cand_;
+    state["info:pair_sn_cand"_] = pair_sn_cand_;
+    state["info:nz_win"_] = nz_win_;
+    state["info:nz_act"_] = nz_act_;
+    state["info:nz_win_1"_] = nz_win_by_len_[1];
+    state["info:nz_win_2"_] = nz_win_by_len_[2];
+    state["info:nz_win_3"_] = nz_win_by_len_[3];
+    state["info:nz_act_1"_] = nz_act_by_len_[1];
+    state["info:nz_act_2"_] = nz_act_by_len_[2];
+    state["info:nz_act_3"_] = nz_act_by_len_[3];
+    state["info:hist_11"_] = hist_11_;
+    state["info:hist_22"_] = hist_22_;
+    state["info:hist_12"_] = hist_12_;
+    state["info:hist_xx"_] = hist_xx_;
+    state["info:hist_p1"_] = hist_p1_;
+    state["info:hist_p2"_] = hist_p2_;
+    state["info:hist_p3"_] = hist_p3_;
+    state["info:hist_p4p"_] = hist_p4p_;
+    state["info:hist_unk"_] = hist_unk_;
+    state["info:w12_all_win"_] = w12_all_win_;
+    state["info:w12_all_p1"_] = w12_all_p1_;
+    state["info:w12_all_p2"_] = w12_all_p2_;
+    state["info:w12_m7_win"_] = w12_m7_win_;
+    state["info:w12_m7_p1"_] = w12_m7_p1_;
+    state["info:w12_m7_p2"_] = w12_m7_p2_;
     state["info:is_selfplay"_] = int(play_mode_ == kSelfPlay);
     state["info:win_reason"_] = win_reason;
     if (reward != 0.0) {
@@ -3271,6 +3635,41 @@ public:
       loc_n_cards = loc_n_cards_;
     }
 
+    // ATK/DEF causal ablation: YGO_ATK_ABL=zero|shuf (diagnostic only, default off)
+    {
+      static const int atk_abl = [] {
+        const char *e = std::getenv("YGO_ATK_ABL");
+        if (!e) return 0;
+        std::string s(e);
+        if (s == "zero") return 1;
+        if (s == "shuf") return 2;
+        return 0;
+      }();
+      if (atk_abl != 0) {
+        auto &fc = state["obs:cards_"_];
+        std::vector<int> mz;
+        for (int i = 0; i < static_cast<int>(fc.Shape(0)); ++i) {
+          if (fc(i, 2) != location_to_id(LOCATION_MZONE)) continue;
+          if ((fc(i, 12) | fc(i, 13) | fc(i, 14) | fc(i, 15)) == 0) continue;
+          mz.push_back(i);
+        }
+        if (atk_abl == 1) {
+          for (int i : mz) {
+            for (int j = 12; j <= 15; ++j) fc(i, j) = 0;
+          }
+        } else if (atk_abl == 2 && mz.size() > 1) {
+          std::vector<std::array<uint8_t, 4>> vals;
+          vals.reserve(mz.size());
+          for (int i : mz) vals.push_back({fc(i, 12), fc(i, 13), fc(i, 14), fc(i, 15)});
+          for (size_t k = 0; k < mz.size(); ++k) {
+            const auto &v = vals[(k + 1) % vals.size()];
+            for (int j = 0; j < 4; ++j) fc(mz[k], j + 12) = v[j];
+          }
+        }
+      }
+    }
+
+    _set_obs_chain(state["obs:chain_"_], to_play_);
     _set_obs_global(state["obs:global_"_], to_play_, loc_n_cards);
 
     // we can't shuffle because idx must be stable in callback
@@ -3286,15 +3685,46 @@ public:
       action.msg_ = msg_;
       const auto &spec = action.spec_;
       if (!spec.empty()) {
-        const auto& spec_info = find_spec_info(spec_infos, spec);
-        action.spec_index_ = spec_info.index;
-        if (action.cid_ == 0) {
-          action.cid_ = spec_info.cid;
+        auto [owner, loc, seq, pos] = spec_to_ls(to_play_, spec);
+        if (owner != to_play_ && loc == LOCATION_HAND) {
+          auto it = spec_infos.find(spec);
+          action.spec_index_ = it == spec_infos.end() ? 0 : it->second.index;
+          action.cid_ = it == spec_infos.end() ? 0 : it->second.cid;
+        } else {
+          const auto& spec_info = find_spec_info(spec_infos, spec);
+          action.spec_index_ = spec_info.index;
+          if (action.cid_ == 0) action.cid_ = spec_info.cid;
         }
       }
     }
 
     _set_obs_actions(state["obs:actions_"_], legal_actions_);
+    _set_obs_battle(state["obs:battle_"_]);
+
+    // ---- 连锁对抗窗口统计（不含训练、纯观测）----
+    nz_pend_ = false;
+    if (!chain_stack_.empty()) {
+      int op_link = 0;
+      for (const auto &ce : chain_stack_) {
+        if (ce.controler != to_play_) ++op_link;
+      }
+      if (op_link > 0) {
+        bool has_neg = false;
+        for (int _i = 0; _i < n_options; ++_i) {
+          if (legal_actions_[_i].masked_) continue;
+          if (legal_actions_[_i].act_ != ActionAct::Activate) continue;
+          uint8_t _sem = state["obs:actions_"_](_i, 12);
+          if (_sem & ((1 << 1) | (1 << 2))) { has_neg = true; break; }
+        }
+        if (has_neg) {
+          int _b = std::min(op_link, 3);
+          ++nz_win_;
+          ++nz_win_by_len_[_b];
+          nz_pend_ = true;
+          nz_pend_len_ = _b;
+        }
+      }
+    }
 
     // write history actions
 
@@ -3325,6 +3755,26 @@ public:
 private:
   using SpecInfos = ankerl::unordered_dense::map<std::string, SpecInfo>;
 
+
+  std::vector<CardCode> public_hand_rows(PlayerId owner, int count,
+                                          int offset, SpecInfos &infos) {
+    auto names = public_hands_[owner].names();
+    if (names.size() > static_cast<size_t>(count))
+      throw std::runtime_error("Public hand exceeds hand size");
+    // A candidate may refer to a slot only while that slot was explicitly
+    // identified. Rows themselves are always in canonical card-code order.
+    if (!names.empty()) {
+      for (int slot = 0; slot < count; ++slot) {
+        auto code = public_hands_[owner].at(slot);
+        if (!code) continue;
+        auto row = std::lower_bound(names.begin(), names.end(), code) - names.begin();
+        infos[ls_to_spec(LOCATION_HAND, slot, 0, true)] = {
+            static_cast<uint16_t>(offset + row + 1), c_get_card_id(code)};
+      }
+    }
+    return names;
+  }
+
   std::tuple<SpecInfos, std::vector<int>> _set_obs_cards(TArray<uint8_t> &f_cards, PlayerId to_play) {
     SpecInfos spec_infos;
     std::vector<int> loc_n_cards;
@@ -3340,13 +3790,20 @@ private:
       };
       for (auto &[location, hidden_for_opponent] : configs) {
         // check this
-        if (opponent && (revealed_.size() != 0)) {
+        if (opponent && location != LOCATION_HAND && !revealed_.empty()) {
           hidden_for_opponent = false;
         }
         if (opponent && hidden_for_opponent) {
           auto n_cards = YGO_QueryFieldCount(pduel_, player, location);
           loc_n_cards.push_back(n_cards);
+          const auto names = location == LOCATION_HAND
+              ? public_hand_rows(player, n_cards, offset, spec_infos) : std::vector<CardCode>{};
           for (auto i = 0; i < n_cards; i++) {
+            if (static_cast<size_t>(i) < names.size()) {
+              auto id = c_get_card_id(names[i]);
+              f_cards(offset, 0) = id >> 8;
+              f_cards(offset, 1) = id & 0xff;
+            }
             f_cards(offset, 2) = location_to_id(location);
             f_cards(offset, 4) = 1;
             offset++;
@@ -3391,6 +3848,18 @@ private:
       };
       for (auto location : configs) {
         std::vector<Card> cards = get_cards_in_location(player, location);
+        if (pi == 1 && location == LOCATION_HAND) {
+          // The privileged critic keeps all physical cards. Align its ID mask
+          // with the same canonical prefix used by the ordinary actor.
+          auto dest = cards.begin();
+          for (auto code : public_hands_[player].names()) {
+            auto found = std::find_if(dest, cards.end(),
+                                      [code](const Card &c) { return c.code_ == code; });
+            if (found == cards.end()) throw std::runtime_error("Missing public hand card");
+            std::rotate(dest, found, found + 1);
+            ++dest;
+          }
+        }
         int n_cards = cards.size();
         for (int i = 0; i < n_cards; ++i) {
           const auto &c = cards[i];
@@ -3420,13 +3889,17 @@ private:
       };
       for (auto &[location, hidden_for_opponent] : configs) {
         // check this
-        if (opponent && (revealed_.size() != 0)) {
+        if (opponent && location != LOCATION_HAND && !revealed_.empty()) {
           hidden_for_opponent = false;
         }
         if (opponent && hidden_for_opponent) {
           auto n_cards = YGO_QueryFieldCount(pduel_, player, location);
           loc_n_cards.push_back(n_cards);
+          const auto names = location == LOCATION_HAND
+              ? public_hand_rows(player, n_cards, offset, spec_infos) : std::vector<CardCode>{};
           for (auto i = 0; i < n_cards; i++) {
+            if (static_cast<size_t>(i) < names.size() && c_get_card_id(names[i]))
+              mask(offset, 0) = 1;
             mask(offset, 1) = 1;
             mask(offset, 3) = 1;
             offset++;
@@ -3610,6 +4083,154 @@ private:
       mask(offset, 11) = 1;
       mask(offset, 12) = 1;
       mask(offset, 13) = 1;
+    }
+  }
+
+  void track_battle_source_move(uint32_t from, uint32_t to) {
+    if (!battle_attack_source_ || (from & kBattleSourceMask) != battle_attack_source_) {
+      return;
+    }
+    // Follow a move within the same player's monster zone. Leaving that zone
+    // ends this binding, even if another monster later takes the same slot.
+    battle_attack_source_ = (from & 0xffff) == (to & 0xffff) ? to & kBattleSourceMask : 0;
+  }
+
+  void _set_obs_battle(TArray<float> &f) {
+    if (!spec_.config["battle_features"_]) return;
+    const bool target_window = msg_ == MSG_SELECT_CARD && attack_target_pending_;
+    if (msg_ != MSG_SELECT_BATTLECMD && !target_window) return;
+    // Query current instances once: pending attack-time snapshots may be stale.
+    const auto own = get_cards_in_location(to_play_, LOCATION_MZONE);
+    const auto opposing = get_cards_in_location(1-to_play_, LOCATION_MZONE);
+    auto view = [](const Card &c) {
+      ygo_battle::PublicCard v;
+      v.visible = !(c.position_ & POS_FACEDOWN);
+      v.sequence = c.sequence_;
+      if (v.visible) {
+        v.attack_position = c.position_ & POS_ATTACK;
+        v.defense_position = c.position_ & POS_DEFENSE;
+        v.attack = c.attack_;
+        // Link monsters have no DEF; the engine uses this field for link markers.
+        v.defense = (c.type_ & TYPE_LINK) ? -1 : c.defense_;
+      }
+      return v;
+    };
+    auto find_seq = [](const std::vector<Card> &cards, int seq) -> const Card* {
+      for (const auto &c: cards) if (c.location_==LOCATION_MZONE && static_cast<int>(c.sequence_)==seq) return &c;
+      return nullptr;
+    };
+    const Card *target_attacker = nullptr;
+    if (target_window) {
+      if (pending_attacker_ctrl_ == to_play_ && pending_attacker_loc_ == LOCATION_MZONE) {
+        target_attacker = find_seq(own, pending_attacker_seq_);
+      } else if (battle_attack_source_ &&
+                 (battle_attack_source_ & 0xff) == to_play_ &&
+                 ((battle_attack_source_ >> 8) & 0xff) == LOCATION_MZONE) {
+        target_attacker = find_seq(own, battle_attack_source_ >> 16);
+      }
+    }
+    std::vector<ygo_battle::PublicCard> opponents;
+    for (const auto &c: opposing) if (c.location_==LOCATION_MZONE) opponents.push_back(view(c));
+    for (int i=0; i<static_cast<int>(legal_actions_.size()) && i<max_options(); ++i) {
+      const auto &la=legal_actions_[i];
+      if (la.masked_ || la.spec_.empty()) continue;
+      const Card *ac=nullptr, *tc=nullptr;
+      const bool direct=la.act_==ActionAct::DirectAttack;
+      if (msg_==MSG_SELECT_BATTLECMD &&
+          (la.act_==ActionAct::Attack || direct)) {
+        auto [ctrl,loc,seq,pos]=spec_to_ls(to_play_,la.spec_);
+        if (ctrl!=to_play_ || loc!=LOCATION_MZONE) continue;
+        ac=find_seq(own,seq);
+      } else if (target_window) {
+        if (!target_attacker) continue;
+        auto [ctrl,loc,seq,pos]=spec_to_ls(to_play_,la.spec_);
+        if (ctrl==to_play_ || loc!=LOCATION_MZONE) continue;
+        ac=target_attacker;
+        tc=find_seq(opposing,seq);
+        if (!tc) continue;
+      } else continue;
+      if (!ac) continue;
+      const auto av=view(*ac);
+      const auto tv=tc ? view(*tc) : ygo_battle::PublicCard{};
+      const auto values=ygo_battle::encode(&av,tc ? &tv : nullptr,opponents,target_window,direct);
+      for (int j=0;j<24;++j) f(i,j)=values[j];
+    }
+  }
+
+  void droll_event(TArray<int>& result);
+  std::array<int,2> outside_draw_adds_{};
+  int opening_ecclesia_stage_ = 0;
+  struct SearchAddition { int player, slot; uint32_t cause, shown; };
+  std::vector<SearchAddition> search_additions_;
+  uint32_t resolving_search_ = 0;
+  void negation_preview(TArray<uint8_t>& result);
+
+  void _set_chain_target_context(TArray<uint8_t> &context) {
+    constexpr CardCode kKaguya = 86937530u;
+    if (msg_ != MSG_SELECT_CHAIN || !duel_started_ || chain_stack_.empty()) return;
+    const auto &observed = chain_stack_.back();
+    if (observed.code != kKaguya || observed.desc != kKaguya * 16u + 1u ||
+        observed.negated || observed.link_no == 0 || observed.link_no > 8) return;
+
+    auto *field = reinterpret_cast<duel *>(pduel_)->game_field;
+    if (field->core.current_chain.empty()) return;
+    const auto &link = field->core.current_chain.back();
+    if (link.chain_count != observed.link_no || link.triggering_player > 1 ||
+        !link.target_cards || link.target_cards->container.size() != 1) return;
+    auto *target = *link.target_cards->container.begin();
+    const auto defender = 1 - link.triggering_player;
+    if (target->current.location != LOCATION_MZONE || target->current.controler != defender ||
+        !(target->current.position & POS_FACEUP) || !target->is_has_relation(link)) return;
+
+    // The selected face-up monster is public. Only its controller can see
+    // whether their own deck or extra deck can pay the script's alternative.
+    context(0) = observed.link_no;
+    context(1) = to_play_ == defender ? 1 : 2;
+    context(2) = target->current.sequence + 1;
+    if (to_play_ != defender) return;
+    if (link.triggering_controler > 1 || link.triggering_location != LOCATION_MZONE) return;
+    const auto &source_zone = field->player[link.triggering_controler].list_mzone;
+    if (link.triggering_sequence >= source_zone.size()) return;
+    auto *source = source_zone[link.triggering_sequence];
+    if (!source || !source->is_has_relation(link) || source->get_status(STATUS_DISABLED | STATUS_FORBIDDEN)) {
+      return;
+    }
+    context(3) = 1;
+    if (!field->is_chain_disablable(0)) return;
+    const uint32_t code = target->get_code();
+    const auto matches = [code, &link](::card *candidate) {
+      return (candidate->get_code() == code || candidate->get_another_code() == code) &&
+             candidate->is_capable_cost_to_grave(link.triggering_player);
+    };
+    const auto &player = field->player[defender];
+    if (std::any_of(player.list_main.begin(), player.list_main.end(), matches) ||
+        std::any_of(player.list_extra.begin(), player.list_extra.end(), matches)) {
+      context(3) = 2;
+    }
+  }
+
+  void _set_obs_chain(TArray<uint8_t> &f, PlayerId to_play) {
+    for (int i = 0; i < 8; ++i)
+      for (int j = 0; j < 13; ++j) f(i, j) = 0;
+    int k = 0;
+    for (const auto &ce : chain_stack_) {
+      if (k >= 8) break;
+      f(k, 0) = static_cast<uint8_t>(std::min<int>(ce.link_no, 7));
+      f(k, 1) = ce.controler != to_play ? 1 : 0;
+      // Use the same code_list CardId as cards_/actions_ and id_embed.
+      // ce.code is the full official card code, not an embedding index.
+      // Unknown/generated cards map to 0 via c_get_card_id().
+      const CardId cid = c_get_card_id(ce.code);
+      f(k, 2) = static_cast<uint8_t>(cid >> 8);
+      f(k, 3) = static_cast<uint8_t>(cid & 0xff);
+      for (int b = 0; b < 4; ++b)
+        f(k, 4 + b) = static_cast<uint8_t>((ce.category >> (8 * b)) & 0xff);
+      f(k, 8) = ce.negated ? 1 : 0;
+      f(k, 9) = static_cast<uint8_t>(location_to_id(ce.loc & 0x7f));
+      f(k, 10) = ce.seq;
+      f(k, 11) = static_cast<uint8_t>(ce.effects >> 8);
+      f(k, 12) = static_cast<uint8_t>(ce.effects & 0xff);
+      ++k;
     }
   }
 
@@ -3814,6 +4435,8 @@ private:
       offset++;
     }
     auto [loc, seq, pos] = spec_to_ls(spec.substr(offset));
+    if (opponent && loc == LOCATION_HAND)
+      return c_get_card_id(public_hands_[player].at(seq));
     if (opponent) {
       bool hidden_for_opponent = true;
       if (
@@ -3845,18 +4468,56 @@ private:
       // SELECT_CARD 等多候选场景不会填 cid_，这里统一用 spec 反查补上，
       // 否则模型看到的候选全是「0 号卡」，无法区分要选哪张。
       LegalAction la = actions[i];
+      if (std::getenv("YGO_CIDTRACE") && !la.spec_.empty() &&
+          (msg_ == MSG_SELECT_CARD || msg_ == MSG_SELECT_UNSELECT_CARD ||
+           msg_ == MSG_SELECT_TRIBUTE || msg_ == MSG_SELECT_SUM)) {
+        static int tr = 0;
+        if (tr++ < 60) {
+          auto tw = cur_win_code_.find(la.spec_);
+          auto tcode = g_id_to_code.find(la.cid_);
+          fmt::print(stderr,
+                     "[CIDTRACE] msg={} spec='{}' obs_code={} win_code={} src={}\n",
+                     int(msg_), la.spec_,
+                     tcode == g_id_to_code.end() ? 0u : tcode->second,
+                     tw == cur_win_code_.end() ? 0u : tw->second,
+                     int(la.src_code_));
+        }
+      }
+      bool filled_from_spec = false;
       if (la.cid_ == 0 && !la.spec_.empty()) {
         la.cid_ = spec_to_card_id(la.spec_, to_play_);
+        filled_from_spec = true;
+        if (std::getenv("YGO_OBSCHK")) ++obs_spec_fill_;
       }
+      bool renamed_hit = false;
       if (!la.spec_.empty()) {
         auto [mc, ml, ms2, mp] = spec_to_ls(to_play_, la.spec_);
         if (mc >= 0 && mc < 2 && ml < 16 && ms2 < 16 &&
             renamed_[mc][ml][ms2] != 0) {
           la.cid_ = renamed_[mc][ml][ms2];
-
+          renamed_hit = true;
         }
       }
       _set_obs_action(feat, i, la);
+      if (std::getenv("YGO_OBSCHK") && !filled_from_spec && !renamed_hit &&
+          !la.finish_ && !la.spec_.empty() && to_play_ == cur_win_player_) {
+        auto itc2 = g_id_to_code.find(la.cid_);
+        uint32_t c2 = (itc2 == g_id_to_code.end())
+                          ? 0u
+                          : static_cast<uint32_t>(itc2->second);
+        uint32_t want = 0u;
+        auto wit = cur_win_code_.find(la.spec_);
+        if (wit != cur_win_code_.end()) want = wit->second;
+        if (la.src_code_ != 0 && c2 != la.src_code_) {
+          static int nbad = 0;
+          if (nbad++ < 12) {
+            fmt::print(stderr,
+                       "[OBSCHK] msg={} tp={} spec={} cid={} code={} src={}\n",
+                       int(msg_), to_play_, la.spec_, int(la.cid_), c2,
+                       int(la.src_code_));
+          }
+        }
+      }
       if (la.cid_ == 2937u) ++obs_gyoku_;
       if (!la.spec_.empty()) {
         auto [qc, ql, qs, qp] = spec_to_ls(to_play_, la.spec_);
@@ -4508,17 +5169,21 @@ private:
     }
 
     if (msg_ == MSG_DRAW) {
-      if (!verbose_) {
-        dp_ = dl_;
-        return;
-      }
       auto player = read_u8();
       auto drawed = read_u8();
+      if (player < 2 && current_phase_ && current_phase_ != PHASE_DRAW) outside_draw_adds_[player] += drawed;
       std::vector<uint32_t> codes;
       for (int i = 0; i < drawed; ++i) {
         uint32_t code = read_u32();
-        codes.push_back(code & 0x7fffffff);
+        if (player < 2 && (code & 0x80000000u))
+          public_hands_[player].public_draw(code & 0x7fffffffu);
+        if (turn_count_ > 0 && player < 2 && tp_ == 1-player) {
+          int g = g_draw_source_index(pduel_,player,drawed,i,code & 0x7fffffffu);
+          if (g >= 0) ++g_draws_[tp_][g];
+        }
+        if (verbose_) codes.push_back(code & 0x7fffffffu);
       }
+      if (!verbose_) return;
       const auto &pl = players_[player];
       pl->notify(fmt::format("Drew {} cards:", drawed));
       for (int i = 0; i < drawed; ++i) {
@@ -4528,6 +5193,8 @@ private:
       const auto &op = players_[1 - player];
       op->notify(fmt::format("Opponent drew {} cards.", drawed));
     } else if (msg_ == MSG_NEW_TURN) {
+      opening_ecclesia_stage_=0; outside_draw_adds_ = {}; search_additions_.clear(); resolving_search_=0;
+      battle_attack_source_ = 0;
       tp_ = int(read_u8());
       turn_count_++;
       if (!verbose_) {
@@ -4554,10 +5221,30 @@ private:
         uint32_t from = read_u32();
         uint32_t to = read_u32();
         uint32_t mv_reason = read_u32();
+        for (auto& entry : chain_stack_) update_negation_source(entry, from, to);
         uint8_t f_ctrl = from & 0xff, f_loc = (from >> 8) & 0xff,
                 f_seq = (from >> 16) & 0xff;
         uint8_t t_ctrl = to & 0xff, t_loc = (to >> 8) & 0xff,
                 t_seq = (to >> 16) & 0xff;
+        auto public_zone = [](uint8_t loc, uint8_t pos) {
+          return loc == LOCATION_GRAVE ||
+                 ((loc == LOCATION_MZONE || loc == LOCATION_SZONE ||
+                   loc == LOCATION_REMOVED || loc == LOCATION_EXTRA) &&
+                  (pos & POS_FACEUP));
+        };
+        const bool known_move = public_zone(f_loc, from >> 24) ||
+                                public_zone(t_loc, to >> 24);
+        if (f_loc == LOCATION_HAND)
+          for (auto& a: search_additions_) if (a.player==f_ctrl && !a.shown) a.slot=-1;
+        if (f_loc == LOCATION_DECK && t_loc == LOCATION_HAND && t_ctrl < 2 && current_phase_ && current_phase_ != PHASE_DRAW) {
+          ++outside_draw_adds_[t_ctrl];
+          if (resolving_search_) search_additions_.push_back({t_ctrl,t_seq,resolving_search_,0});
+        }
+        if (f_loc == LOCATION_HAND && f_ctrl < 2)
+          public_hands_[f_ctrl].leave(known_move ? mv_code : 0);
+        if (t_loc == LOCATION_HAND && t_ctrl < 2)
+          public_hands_[t_ctrl].arrive(t_seq, known_move ? mv_code : 0);
+        track_battle_source_move(from, to);
         if (simple_fusion_pending_ && f_loc == LOCATION_EXTRA &&
             t_loc == LOCATION_MZONE && t_ctrl < 2 && t_seq < 7) {
           simple_fusion_on_mzone_[t_ctrl][t_seq] = true;
@@ -4567,8 +5254,11 @@ private:
         if (f_loc == LOCATION_MZONE && f_ctrl < 2 && f_seq < 7 &&
             t_loc != LOCATION_MZONE &&
             simple_fusion_on_mzone_[f_ctrl][f_seq]) {
-          if (current_phase_ == PHASE_END) ++sf_destroyed_;
-          else ++sf_consumed_;
+          // 只统计我方；对方的仍要清标记，否则残留在格子上被后续误判
+          if (f_ctrl == actor_) {
+            if (current_phase_ == PHASE_END) ++sf_destroyed_;
+            else ++sf_consumed_;
+          }
           simple_fusion_on_mzone_[f_ctrl][f_seq] = false;
         }
         // 事件级：用对方场上的怪兽当融合素材
@@ -4576,6 +5266,7 @@ private:
         if (f_loc == LOCATION_MZONE && t_loc == LOCATION_GRAVE &&
             (mv_reason & 0x40u) && tail_fusion_ctrl_ >= 0 &&
             tail_fusion_ctrl_ < 2 &&
+            tail_fusion_ctrl_ == static_cast<int>(actor_) &&
             tail_fusion_ctrl_ != static_cast<int>(f_ctrl) &&
             f_ctrl >= 0 && f_ctrl < 2 && f_loc < 16 && f_seq < 16 &&
             renamed_[f_ctrl][f_loc][f_seq] != 0) {
@@ -4595,37 +5286,51 @@ private:
           renamed_[f_ctrl][f_loc][f_seq] = 0;
           ++rename_clr_;
         }
-        // 墓地 -> 魔陷区：TAIL 的 e3 装备 / START 的 e3 盖放
-        if (f_loc == LOCATION_GRAVE && t_loc == LOCATION_SZONE) {
+        // 墓地 -> 魔陷区：TAIL 的 e3 装备 / START 的 e3 盖放（只看我方）
+        if (f_loc == LOCATION_GRAVE && t_loc == LOCATION_SZONE &&
+            f_ctrl == actor_) {
           if (mv_code == 82119326) {
             ++tail_equip_;
-            if (!tail_chain_done_ && mill_tail_turn_ == turn_count_) {
+            const int sc = static_cast<int>(f_ctrl);
+            if (sc >= 0 && sc < 2 && !tail_chain_done_[sc] &&
+                mill_tail_turn_ == turn_count_) {
               ++tail_chain_;
-              tail_chain_done_ = true;
+              tail_chain_done_[sc] = true;
             }
           } else if (mv_code == 19326613) {
             ++start_set_;
           }
         }
         // 统计用：本步 DECK -> GRAVE 的卡（最多记 2 张）
-        if (f_loc == LOCATION_DECK && t_loc == LOCATION_GRAVE && mill_cnt_ < 2) {
+        if (f_loc == LOCATION_DECK && t_loc == LOCATION_GRAVE) {
           int mid = static_cast<int>(c_get_card_id(mv_code));
-          if (mill_cnt_ == 0) mill_id_a_ = mid;
-          else mill_id_b_ = mid;
-          if (mid == 12451) mill_tail_turn_ = turn_count_;   // TAIL 进墓的回合
-          ++mill_cnt_;
-          if (pend_pair_ && mill_cnt_ == 1) {
-            // 真堆墓：候选数在这一刻才计入（检索不会走到这里）
-            if (pend_s_) ++pair_start_cand_;
-            if (pend_t_) ++pair_tail_cand_;
-            pend_pair_ = false;
+          // 奖励用：只认我方堆墓（mill_id_* / mill_tail_turn_ 供 shaping 使用）
+          if (f_ctrl == actor_ && mill_mine_cnt_ < 2) {
+            if (mill_mine_cnt_ == 0) mill_id_a_ = mid;
+            else mill_id_b_ = mid;
+            if (mid == 12451) mill_tail_turn_ = turn_count_;   // TAIL 进墓的回合
+            ++mill_mine_cnt_;
+          }
+          // 统计用：候选/选中计数保持双方口径（combo 分析用）
+          if (mill_cnt_ < 2) {
+            ++mill_cnt_;
+            if (pend_pair_ && mill_cnt_ == 1) {
+              // 真堆墓：候选数在这一刻才计入（检索不会走到这里）
+              if (pend_s_) ++pair_start_cand_;
+              if (pend_t_) ++pair_tail_cand_;
+              if (pend_kg_) ++pair_kg_cand_;
+              if (pend_fd_) ++pair_fd_cand_;
+              if (pend_mg_) ++pair_mg_cand_;
+              if (pend_sn_) ++pair_sn_cand_;
+              pend_pair_ = false;
+            }
           }
           if (sel_has_start_ && mv_code == 19326613) ++pair_start_pick_;
           if (sel_has_tail_ && mv_code == 82119326) ++pair_tail_pick_;
         }
         // 阶段0+：威凯特当融合素材
         //   A 威凯特 mzone->grave（我方）
-        //   B 终端 extra->mzone（我方），且距 A <= 5 步
+        //   B 终端 extra->mzone（我方），且距 A <= 2 步
         {
           auto itc = card_ids_.find(mv_code);
           const int cid = (itc == card_ids_.end())
@@ -4637,7 +5342,7 @@ private:
           } else if ((cid == 638 || cid == 11847) && t_ctrl == actor_ &&
                      f_loc == LOCATION_EXTRA && t_loc == LOCATION_MZONE &&
                      wicat_grave_step_ >= 0 &&
-                     step_count_ - wicat_grave_step_ <= 5) {
+                     step_count_ - wicat_grave_step_ <= 2) {
             ++wicat_convert_;
             wicat_grave_step_ = -1;
           }
@@ -4767,14 +5472,16 @@ private:
                                cnew.name_));
       }
     } else if (msg_ == MSG_SWAP) {
-      if (!verbose_) {
-        dp_ = dl_;
-        return;
-      }
       CardCode code1 = read_u32();
       uint32_t loc1 = read_u32();
       CardCode code2 = read_u32();
       uint32_t loc2 = read_u32();
+      for (auto& entry : chain_stack_)
+        if (!update_negation_source(entry, loc1, loc2)) update_negation_source(entry, loc2, loc1);
+      if (!verbose_) {
+        dp_ = dl_;
+        return;
+      }
       Card cards[2];
       cards[0] = c_get_card(code1);
       cards[1] = c_get_card(code2);
@@ -5044,14 +5751,22 @@ private:
       auto size = read_u8();
       std::vector<Card> cards;
       for (int i = 0; i < size; ++i) {
-        read_u32();
+        auto code = read_u32();
         auto c = read_u8();
         auto loc = read_u8();
         auto seq = read_u8();
         if (verbose_) {
           cards.push_back(get_card(c, loc, seq));
         }
-        revealed_.insert(ls_to_spec(loc, seq, 0, c == player));
+        if (loc == LOCATION_HAND) {
+          if (c < 2 && player == 1 - c)
+            public_hands_[c].reveal(seq, code);
+          if (c<2 && player==1-c && resolving_search_)
+            for (auto& a: search_additions_)
+              if (a.player==c && a.slot==seq && a.cause==resolving_search_ && !a.shown) a.shown=code;
+        } else {
+          revealed_.insert(ls_to_spec(loc, seq, 0, c == player));
+        }
       }
       if (!verbose_) {
         return;
@@ -5173,6 +5888,7 @@ private:
       pl->notify(fmt::format("{} counter(s) of type {} removed from {} ().", count, "UNK", c.name_, c.get_spec(player)));
       op->notify(fmt::format("{} counter(s) of type {} removed from {} ().", count, "UNK", c.name_, c.get_spec(op_id)));
     } else if (msg_ == MSG_ATTACK_DISABLED) {
+      battle_attack_source_ = 0;
       if (!verbose_) {
         dp_ = dl_;
         return;
@@ -5212,12 +5928,14 @@ private:
       pl->notify(fmt::format("You shuffled your extra deck ({}).", count));
       op->notify(fmt::format("{} shuffled their extra deck ({}).", pl->nickname_, count));
     } else if (msg_ == MSG_SHUFFLE_HAND) {
+      auto player = read_u8();
+      for (auto& a: search_additions_) if (a.player==player && !a.shown) a.slot=-1;
+      if (player < 2) public_hands_[player].shuffle();
       if (!verbose_) {
         dp_ = dl_;
         return;
       }
 
-      auto player = read_u8();
       dp_ = dl_;
 
       auto& pl = players_[player];
@@ -5301,21 +6019,21 @@ private:
                      atk + "/" + def + ") in " + pos + " position.");
         }
       }
-    } else if (msg_ == MSG_CHAIN_NEGATED) {
-      // 标记最近一层被无效
-      if (!chain_stack_.empty()) {
-        chain_stack_.back().negated = true;
-        pending_rename_.erase(chain_stack_.back().id);
-        rename_pending_chain_ = 0;
+    } else if (msg_ == MSG_CHAIN_NEGATED || msg_ == MSG_CHAIN_DISABLED) {
+      const auto link_no = read_u8();
+      auto link = std::find_if(chain_stack_.rbegin(), chain_stack_.rend(),
+                               [link_no](const ChainEntry &entry) { return entry.link_no == link_no; });
+      if (link_no != 0 && link != chain_stack_.rend()) {
+        link->negated = true;
       }
-      dp_ = dl_;
-    } else if (msg_ == MSG_CHAIN_DISABLED) {
+      // Rename bookkeeping uses the existing resolution path.
       if (!chain_stack_.empty()) {
         pending_rename_.erase(chain_stack_.back().id);
         rename_pending_chain_ = 0;
       }
       dp_ = dl_;
     } else if (msg_ == MSG_CHAIN_SOLVED) {
+      resolving_search_=0;
       if (!chain_stack_.empty()) {
         int cid2 = chain_stack_.back().id;
         auto it2 = pending_rename_.find(cid2);
@@ -5334,6 +6052,9 @@ private:
       dp_ = dl_;
       revealed_.clear();
     } else if (msg_ == MSG_CHAIN_SOLVING) {
+      const auto resolving_link = read_u8();
+      resolving_search_=0;
+      for (const auto& link: chain_stack_) if (link.link_no == resolving_link) resolving_search_=link.code;
       if (rename_pending_chain_ > 0 && !chain_stack_.empty() &&
           chain_stack_.back().id == rename_pending_chain_) {
         rename_pending_ = true;
@@ -5353,15 +6074,17 @@ private:
       dp_ = dl_;
     } else if (msg_ == MSG_CHAINING) {
       CardCode code = read_u32();
-      // 阶段0：辉夜（86937530）效果发动 -> 本步计数，供交卷 K2 使用。
-      if (code == 86937530) ++kaguya_effect_;
       Card card = c_get_card(code);
+      // 阶段0：辉夜（86937530）效果发动 -> 本步计数，供交卷 K2 使用（只看我方）
       // 阶段0+：START / TAIL 的效果发动（只看我方）
       if (card.controler_ == actor_) {
-        if (code == 19326613) ++start_used_;
+        if (code == 86937530) ++kaguya_effect_;
+        else if (code == 19326613) ++start_used_;
         else if (code == 82119326) ++tail_used_;
       }
       card.set_location(read_u32());
+      if (card.location_ == LOCATION_HAND && card.controler_ < 2)
+        public_hands_[card.controler_].reveal(card.sequence_, code);
       auto tc = read_u8();
       auto tl = read_u8();
       auto ts = read_u8();
@@ -5393,7 +6116,8 @@ private:
         int tc2 = static_cast<int>(card.controler_);
         if (tc2 >= 0 && tc2 < 2) ++tail_fusion_[tc2];
         tail_fusion_pending_ = true;
-        tail_fusion_ctrl_ = tc2;
+        // 只记录我方发起的 TAIL 融合，避免对手的融合覆盖归属
+        if (tc2 == static_cast<int>(actor_)) tail_fusion_ctrl_ = tc2;
       }
       if (code == 86937530) {
         int kc = static_cast<int>(card.controler_);
@@ -5408,19 +6132,22 @@ private:
       chaining_player_ = c;
       // 记录连锁项（训练时也需要，之前在这里直接 return 丢弃了）
       ChainEntry ce;
-      ce.controler = c;
+      ce.controler = tc;
       ce.effects = card.effects_;
       ce.code = code;
       ce.desc = desc;
-      ce.loc = card.location_;
-      ce.seq = card.sequence_;
-      ce.link_no = static_cast<uint8_t>(std::min<size_t>(chain_stack_.size() + 1, 7));
+      ce.loc = tl;
+      ce.seq = tl == LOCATION_MZONE
+          ? (card.location_ == LOCATION_MZONE && card.controler_ == tc ? card.sequence_ : 74)
+          : ts;
+      ce.link_no = cs;
       {
         auto cit = g_card_category.find(static_cast<uint32_t>(code));
         if (cit != g_card_category.end()) ce.category = cit->second;
       }
       ++chain_seq_;
       ce.id = chain_seq_;
+      if (chain_stack_.empty()) search_additions_.clear();
       chain_stack_.push_back(ce);
       if (code == 19144622u || code == 56725612u || code == 78021082u) {
         if (!last_opp_sel_spec_.empty()) {
@@ -5468,11 +6195,12 @@ private:
           pl->nickname_ + " pays " + std::to_string(cost) + " LP. " +
           pl->nickname_ + "'s LP is now " + std::to_string(lp_[player]) + ".");
     } else if (msg_ == MSG_ATTACK) {
+      auto attacker = read_u32();
+      battle_attack_source_ = attacker & kBattleSourceMask;
       if (!verbose_) {
         dp_ = dl_;
         return;
       }
-      auto attacker = read_u32();
       PlayerId ac = attacker & 0xff;
       auto aloc = (attacker >> 8) & 0xff;
       auto aseq = (attacker >> 16) & 0xff;
@@ -5510,6 +6238,7 @@ private:
                             ")");
       }
     } else if (msg_ == MSG_DAMAGE_STEP_START) {
+      battle_attack_source_ = 0;
       if (!verbose_) {
         return;
       }
@@ -5601,6 +6330,7 @@ private:
       done_ = true;
       return;
     } else if (msg_ == MSG_SELECT_BATTLECMD) {
+      battle_attack_source_ = 0;
       auto player = read_u8();
       auto activatable = read_cardlist_spec(player, true);
       auto attackable = read_cardlist_spec(player, true, true);
@@ -5725,6 +6455,10 @@ private:
       auto max = read_u8();
       auto select_size = read_u8();
 
+      cur_win_code_.clear();
+      cur_win_player_ = player;
+      std::vector<uint32_t> sel_codes;
+      sel_codes.reserve(select_size);
       std::vector<std::string> select_specs;
       select_specs.reserve(select_size);
       if (verbose_) {
@@ -5733,6 +6467,7 @@ private:
                    std::to_string(max) + " cards:");
         for (int i = 0; i < select_size; ++i) {
           auto code = read_u32();
+          sel_codes.push_back(code);
           auto loc = read_u32();
           Card card = c_get_card(code);
           card.set_location(loc);
@@ -5743,7 +6478,7 @@ private:
         }
       } else {
         for (int i = 0; i < select_size; ++i) {
-          dp_ += 4;
+          sel_codes.push_back(read_u32());
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
@@ -5760,6 +6495,11 @@ private:
 
       for (int j = 0; j < select_specs.size(); ++j) {
         legal_actions_.push_back(LegalAction::from_spec(select_specs[j]));
+      }
+      for (int j = 0; j < static_cast<int>(select_specs.size()) &&
+                      j < static_cast<int>(sel_codes.size()); ++j) {
+        set_action_cid_from_code(select_specs[j], sel_codes[j]);
+        cur_win_code_[select_specs[j]] = sel_codes[j];
       }
 
       if (finishable) {
@@ -5786,12 +6526,19 @@ private:
       auto max = read_u8();
       auto size = read_u8();
 
+      cur_win_code_.clear();
       std::vector<std::string> specs;
       specs.reserve(size);
+      // 消息里每张候选都带 4 字节卡号；非 verbose 路径过去只 `dp_ += 4` 跳过，
+      // 统计时再用位置反查卡号，结果反查出来的是「另一张卡」（卡组顺序被引擎洗过），
+      // 导致 mill_cand / pair 系列统计全错（2026-11-19 定位）。这里统一把卡号读出来。
+      std::vector<uint32_t> sel_codes;
+      sel_codes.reserve(size);
       if (verbose_) {
         std::vector<Card> cards;
         for (int i = 0; i < size; ++i) {
           auto code = read_u32();
+          sel_codes.push_back(code);
           auto loc = read_u32();
           Card card = c_get_card(code);
           card.set_location(loc);
@@ -5814,7 +6561,7 @@ private:
         }
       } else {
         for (int i = 0; i < size; ++i) {
-          dp_ += 4;
+          sel_codes.push_back(read_u32());
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
@@ -5822,6 +6569,24 @@ private:
           auto spec = ls_to_spec(loc, seq, pos, controller != player);
           specs.push_back(spec);
         }
+      }
+
+      // 统计：(min,max)==(1,2) 窗口实际选了几张（威凯特素材取除窗口 = m7 区）
+      if (min == 1 && max == 2 && size >= 2) {
+        ++w12_all_win_;
+        bool has_m7 = false;
+        for (const auto &sp : specs) {
+          if (sp.size() >= 2 && sp[0] == 'm' && sp[1] == '7') {
+            has_m7 = true;
+            break;
+          }
+        }
+        if (has_m7) ++w12_m7_win_;
+        w12_pend_ = true;
+        w12_m7_ = has_m7;
+      } else {
+        w12_pend_ = false;
+        w12_m7_ = false;
       }
 
       // 改名效果的目标选择窗口
@@ -5868,11 +6633,18 @@ private:
       }
       // 统计：从卡组选「妖精传姬」卡的候选构成（威凯特/START 的堆墓选择）
       if (size > 0) {
-        static const uint32_t kFT[] = {56725612u, 86937530u, 19144622u,
-                                       4026187u, 19326613u, 78021082u,
-                                       82119326u, 27632520u};
-        bool all_deck = true, all_ft = true, any_ft = false;
+        // 妖精传姬 = setcode 0x1db 的全部 12 张卡（与 lua 的 IsSetCard(0x1db) 一致）。
+        // 2026-11-19 修正：旧实现只有 8 个卡号，漏了白雪/塔利娅/辛德瑞拉/罗奇卡，
+        // 且任一候选解析失败就把整条窗口判成「非纯妖精传姬」，导致 mill_cand
+        // 只剩小池子残渣（size1 虚高到 68.6%）。这里改用全量卡号表，
+        // 并把「解析不到卡号」单独计 hist_unk，不再与「非妖精传姬」混为一谈。
+        static const uint32_t kFT[] = {
+            4026187u,  19144622u, 19326613u, 27632520u, 42921475u,
+            52022648u, 55623480u, 56725612u, 65953423u, 78021082u,
+            82119326u, 86937530u};
+        bool all_deck = true, all_ft = true, any_ft = false, any_unk = false;
         bool has_s = false, has_t = false;
+        bool has_kg = false, has_fd = false, has_mg = false, has_sn = false;
         for (int i = 0; i < size; ++i) {
           if (specs[i].empty() ||
               !std::isdigit(static_cast<unsigned char>(specs[i][0]))) {
@@ -5881,9 +6653,18 @@ private:
           }
           CardId cid = spec_to_card_id(specs[i], player);
           auto iit = g_id_to_code.find(cid);
-          uint32_t code = (iit == g_id_to_code.end())
-                              ? 0u
-                              : static_cast<uint32_t>(iit->second);
+          uint32_t code = 0;
+          if (i < static_cast<int>(sel_codes.size()) && sel_codes[i] != 0) {
+            // 消息自带的卡号（准确）
+            code = sel_codes[i];
+          } else if (iit != g_id_to_code.end() && iit->second != 0) {
+            // 隐藏卡/无卡号时退回位置反查（可能不准，仅供统计参考）
+            code = static_cast<uint32_t>(iit->second);
+          } else {
+            any_unk = true;
+            all_ft = false;
+            continue;
+          }
           bool ft = false;
           for (uint32_t k : kFT) {
             if (k == code) { ft = true; break; }
@@ -5891,6 +6672,10 @@ private:
           if (ft) { any_ft = true; } else { all_ft = false; }
           if (code == 19326613u) has_s = true;
           if (code == 82119326u) has_t = true;
+          if (code == 86937530u) has_kg = true;
+          if (code == 56725612u) has_fd = true;
+          if (code == 19144622u) has_mg = true;
+          if (code == 55623480u) has_sn = true;
         }
         {
           bool has_g = false;
@@ -5904,17 +6689,53 @@ private:
           }
           if (has_g) ++sel_gyoku_;
         }
+        if (std::getenv("YGO_DBG_SEL")) {
+          static int dbg_n = 0;
+          static int dbg_tot = 0;
+          if (dbg_n < 20 && size >= 2 && all_deck) {
+            for (int i = 0; i < size && i < static_cast<int>(sel_codes.size());
+                 ++i) {
+              CardId rc = spec_to_card_id(specs[i], player);
+              auto rit = g_id_to_code.find(rc);
+              uint32_t rcode = (rit == g_id_to_code.end())
+                                   ? 0u
+                                   : static_cast<uint32_t>(rit->second);
+              ++dbg_tot;
+              if (rcode != sel_codes[i]) {
+                fmt::print(stderr,
+                           "[MISMATCH] spec={} msg={} resolved={} ({} of {})\n",
+                           specs[i], sel_codes[i], rcode, dbg_tot,
+                           int(dbg_n) + 1);
+                ++dbg_n;
+              }
+            }
+          }
+        }
         if (all_deck && any_ft) {
           ++mill_any_sel_;
           mill_any_size_ += size;
           if (has_s) ++mill_any_start_;
           if (has_t) ++mill_any_tail_;
+          // 直方图：口径 =「全部候选在卡组 + 至少一张妖精传姬」
+          if (min == 1 && max == 1) ++hist_11_;
+          else if (min == 2 && max == 2) ++hist_22_;
+          else if (min == 1 && max == 2) ++hist_12_;
+          else ++hist_xx_;
+          if (size == 1) ++hist_p1_;
+          else if (size == 2) ++hist_p2_;
+          else if (size == 3) ++hist_p3_;
+          else ++hist_p4p_;
+          if (any_unk) ++hist_unk_;
           sel_has_start_ = has_s;
           sel_has_tail_ = has_t;
           // 先挂起，等 MSG_MOVE 的 DECK->GRAVE 确认这是堆墓而不是检索
           pend_pair_ = true;
           pend_s_ = has_s;
           pend_t_ = has_t;
+          pend_kg_ = has_kg;
+          pend_fd_ = has_fd;
+          pend_mg_ = has_mg;
+          pend_sn_ = has_sn;
         }
         if (all_deck) {
           ++mill_cand_dsel_;
@@ -5929,6 +6750,72 @@ private:
         }
       }
 
+      // ── 门控实验：强制堆墓优先级（YGO_MILL_ARM=A/B，默认关闭）──
+      {
+        static const int mill_arm = []() {
+          const char *s = std::getenv("YGO_MILL_ARM");
+          if (!s) return 0;
+          if (s[0] == 'A' || s[0] == 'a') return 1;
+          if (s[0] == 'B' || s[0] == 'b') return 2;
+          return 0;
+        }();
+        static const int arm_player = []() {
+          const char *s = std::getenv("YGO_MILL_ARM_PLAYER");
+          if (!s) return 0;
+          return (s[0] == '1') ? 1 : 0;
+        }();
+        // 只对「威凯特 2 张送墓」窗口生效（min=max=2 且候选全是妖精传姬），
+        // 避免误伤检索窗口（上一版没有这个限制，导致策略崩盘、实验无效）
+        static const uint32_t kFTall[] = {
+            4026187u,  19144622u, 19326613u, 27632520u, 42921475u,
+            52022648u, 55623480u, 56725612u, 65953423u, 78021082u,
+            82119326u, 86937530u};
+        bool ft_only = !sel_codes.empty();
+        for (uint32_t c : sel_codes) {
+          bool f = false;
+          for (uint32_t k : kFTall) {
+            if (k == c) { f = true; break; }
+          }
+          if (!f) { ft_only = false; break; }
+        }
+        if (mill_arm != 0 && min == 2 && max == 2 && ft_only &&
+            !sel_codes.empty() && player == arm_player) {
+          static const uint32_t kArmA[] = {82119326u, 19326613u, 56725612u,
+                                           86937530u, 19144622u, 55623480u};
+          static const uint32_t kArmB[] = {56725612u, 86937530u, 19144622u,
+                                           55623480u, 19326613u, 82119326u};
+          const uint32_t *pri = (mill_arm == 1) ? kArmA : kArmB;
+          // min==max==2：引擎要求一次回传 min 个下标，回 1 个会被判非法
+          std::vector<int> picks;
+          for (int k = 0; k < 6 && static_cast<int>(picks.size()) < min; ++k) {
+            for (int i = 0; i < static_cast<int>(sel_codes.size()); ++i) {
+              if (sel_codes[i] != pri[k]) continue;
+              bool dup = false;
+              for (int q : picks) {
+                if (q == i) { dup = true; break; }
+              }
+              if (dup) continue;
+              picks.push_back(i);
+              break;
+            }
+          }
+          if (static_cast<int>(picks.size()) == min) {
+            std::string dbg;
+            for (int q : picks) {
+              dbg += fmt::format("{}:{} ", q, sel_codes[q]);
+            }
+            fmt::print(stderr, "[ARM] min={} max={} size={} picks={}\n",
+                       min, max, size, dbg);
+            resp_buf_[0] = min;
+            for (int i = 0; i < min; ++i) resp_buf_[i + 1] = picks[i];
+            YGO_SetResponseb(pduel_, resp_buf_);
+            return;
+          }
+        }
+      }
+
+      last_sel_codes_ = sel_codes;
+      last_sel_specs_ = specs;
       if (discard_hand_) {
         discard_hand_ = false;
         if (current_phase_ == PHASE_END) {
@@ -5961,6 +6848,15 @@ private:
 
       init_multi_select(min, max, 0, specs, 0, {}, {});
 
+      // 修复（2026-11-19 §159.9）：卡组候选的卡号必须用引擎消息里的真实卡号。
+      // spec_to_card_id() 按位置反查 YGO_QueryCard 对卡组位置返回的是另一张卡，
+      // 会让模型在「从卡组选卡」时看到错误的候选身份，训练/推理都受影响。
+      for (int i = 0; i < static_cast<int>(specs.size()) &&
+                      i < static_cast<int>(sel_codes.size()); ++i) {
+        set_action_cid_from_code(specs[i], sel_codes[i]);
+        cur_win_code_[specs[i]] = sel_codes[i];
+      }
+
       to_play_ = player;
       callback_ = [this](int idx) {
         _callback_multi_select(idx, ms_max_ == 1);
@@ -5972,6 +6868,9 @@ private:
       auto max = read_u8();
       auto size = read_u8();
 
+      cur_win_code_.clear();
+      std::vector<uint32_t> sel_codes;
+      sel_codes.reserve(size);
       std::vector<int> release_params;
       release_params.reserve(size);
       std::vector<std::string> specs;
@@ -5980,6 +6879,7 @@ private:
         std::vector<Card> cards;
         for (int i = 0; i < size; ++i) {
           auto code = read_u32();
+          sel_codes.push_back(code);
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
@@ -6000,7 +6900,7 @@ private:
         }
       } else {
         for (int i = 0; i < size; ++i) {
-          dp_ += 4;
+          sel_codes.push_back(read_u32());
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
@@ -6034,6 +6934,11 @@ private:
       // }
 
       init_multi_select(min, max, 0, specs);
+      for (int i = 0; i < static_cast<int>(specs.size()) &&
+                      i < static_cast<int>(sel_codes.size()); ++i) {
+        set_action_cid_from_code(specs[i], sel_codes[i]);
+        cur_win_code_[specs[i]] = sel_codes[i];
+      }
 
       to_play_ = player;
       callback_ = [this](int idx) {
@@ -6059,6 +6964,9 @@ private:
                                  " not implemented for MSG_SELECT_SUM");
       }
 
+      cur_win_code_.clear();
+      cur_win_player_ = player;
+      std::vector<uint32_t> sum_codes;
       std::vector<int> select_params;
       std::vector<std::string> select_specs;
 
@@ -6106,6 +7014,7 @@ private:
         select.reserve(select_size);
         for (int i = 0; i < select_size; ++i) {
           auto code = read_u32();
+          sum_codes.push_back(code);
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
@@ -6123,7 +7032,7 @@ private:
         }
       } else {
         for (int i = 0; i < select_size; ++i) {
-          dp_ += 4;
+          sum_codes.push_back(read_u32());
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
@@ -6175,6 +7084,11 @@ private:
 
       init_multi_select(
         _min, _max, must_select_size, select_specs, 1, combs);
+      for (int i = 0; i < static_cast<int>(select_specs.size()) &&
+                      i < static_cast<int>(sum_codes.size()); ++i) {
+        set_action_cid_from_code(select_specs[i], sum_codes[i]);
+        cur_win_code_[select_specs[i]] = sum_codes[i];
+      }
 
       to_play_ = player;
       callback_ = [this](int idx) {
@@ -6437,6 +7351,7 @@ private:
         YGO_SetResponsei(pduel_, idx);
       };
     } else if (msg_ == MSG_SELECT_IDLECMD) {
+      battle_attack_source_ = 0;
       int32_t player = read_u8();
       auto summonable_ = read_cardlist_spec(player);
       auto spsummon_ = read_cardlist_spec(player);
@@ -6967,6 +7882,7 @@ public:
     state["info:rename_hit"_] = 0;
     state["info:rename_clr"_] = 0;
     state["info:obs_gyoku"_] = 0;
+    state["info:obs_spec_fill"_] = 0;
     state["info:opp_fusion_mat"_] = 0;
     state["info:tail_chain"_] = 0;
     state["info:gyoku_id"_] = 0;
@@ -6997,6 +7913,11 @@ public:
     state["info:pair_start_pick"_] = 0;
     state["info:pair_tail_cand"_] = 0;
     state["info:pair_tail_pick"_] = 0;
+    state["info:opening_ecclesia"_]=0;
+    for (int i=0; i<spec_.config["max_options"_]; ++i) for (int j=0;j<3;++j) state["info:droll_event"_](i,j)=0;
+    for (int i = 0; i < spec_.config["max_options"_]; ++i) state["info:negation_preview"_](i) = 0;
+    for (int i = 0; i < 8; ++i) state["info:chain_effect_slots"_](i) = 0;
+    for (int i = 0; i < 4; ++i) state["info:chain_target_context"_](i) = 0;
     state["obs:global_"_][32] = uint8_t(1);
   }
 

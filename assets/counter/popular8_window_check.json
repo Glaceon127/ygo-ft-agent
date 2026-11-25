@@ -1,0 +1,77 @@
+{
+  "Blitzclique": {
+    "seed": 2200008,
+    "source": 59921227,
+    "counters": [
+      14558127,
+      14558127
+    ],
+    "slot": 2,
+    "zone": 4
+  },
+  "Rikka": {
+    "seed": 5710005,
+    "source": 53286626,
+    "counters": [
+      14558127
+    ],
+    "slot": 0,
+    "zone": 4
+  },
+  "Dracotail": {
+    "seed": 5710006,
+    "source": 32548318,
+    "counters": [
+      14558127
+    ],
+    "slot": 0,
+    "zone": 4
+  },
+  "Yummy": {
+    "seed": 2220020,
+    "source": 31425736,
+    "counters": [
+      14558127,
+      14558127
+    ],
+    "slot": 2,
+    "zone": 3
+  },
+  "Witchcrafter": {
+    "seed": 5710011,
+    "source": 32353566,
+    "counters": [
+      59438930,
+      59438930
+    ],
+    "slot": 1,
+    "zone": 4
+  },
+  "Invoked": {
+    "seed": 5710006,
+    "source": 86120751,
+    "counters": [
+      10045474
+    ],
+    "slot": 2,
+    "zone": 3
+  },
+  "DarkMagician": {
+    "seed": 2200008,
+    "source": 41350417,
+    "counters": [
+      14558127
+    ],
+    "slot": 1,
+    "zone": 4
+  },
+  "Branded": {
+    "seed": 5710005,
+    "source": 44362883,
+    "counters": [
+      14558127
+    ],
+    "slot": 0,
+    "zone": 4
+  }
+}

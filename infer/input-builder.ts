@@ -7,6 +7,7 @@
 //   位掩码    ygopro-msg-encode/dist/src/vendor/ocgcore-constants.d.ts
 //   +1/归一化 由 Python 侧 encode_card 处理，这里传原始值
 import { Room } from '../../src/room';
+import { readCardWithReader } from '../../src/utility';
 
 // ---- 位掩码（数值直接取自 ocgcore-constants.d.ts）----
 const LOC = {
@@ -55,7 +56,7 @@ const LOCATION_ORDER = [
 // refresh-query.ts 的分区域 queryFlag
 function zoneQueryFlag(location: number): number {
   switch (location) {
-    case LOC.MZONE: return 0x881fff;
+    case LOC.MZONE: return 0x891fff;
     case LOC.SZONE: return 0xe81fff;
     case LOC.HAND: return 0x681fff;
     case LOC.GRAVE: return 0x081fff;
@@ -82,6 +83,10 @@ function locationName(loc: number): string {
 
 function positionName(pos: number | undefined): string {
   if (!pos) return 'none';
+  if (pos === 5) return 'faceup';
+  if (pos === 10) return 'facedown';
+  if (pos === 3) return 'attack';
+  if (pos === 12) return 'defense';
   if (pos & POS.FACEUP_ATTACK) return 'faceup_attack';
   if (pos & POS.FACEDOWN_ATTACK) return 'facedown_attack';
   if (pos & POS.FACEUP_DEFENSE) return 'faceup_defense';
@@ -106,7 +111,7 @@ function typeNames(t: number | undefined): string[] {
   return out;
 }
 
-interface YgoinfCard {
+export interface YgoinfCard {
   code: number;
   location: string;
   sequence: number;
@@ -118,6 +123,7 @@ interface YgoinfCard {
   level: number;
   counter: number;
   negated: boolean;
+  temporary?: boolean;
   attack: number;
   defense: number;
   types: string[];
@@ -154,6 +160,7 @@ function phaseName(p: number | undefined): string {
 export async function buildFieldSnapshot(
   room: Room,
   myDuelPos: number,
+  revealed: string[] = [],
 ): Promise<FieldSnapshot> {
   const ocgcore = room.ocgcore;
   if (!ocgcore) throw new Error('no ocgcore');
@@ -166,11 +173,37 @@ export async function buildFieldSnapshot(
       const res = await ocgcore.queryFieldCard({
         player,
         location: loc,
-        queryFlag: zoneQueryFlag(loc),
+        queryFlag: zoneQueryFlag(loc) | 0x10000,
         useCache: 0,
       });
       for (const q of res?.cards ?? []) {
         if (!q || q.empty) continue;
+        const zone = q.location ?? loc;
+        const privateZone = zone === LOC.HAND || (!revealed.length && (zone === LOC.DECK || zone === LOC.EXTRA));
+        if (!(pi === 1 && privateZone) && q.overlayCards?.length) {
+          const reader = await room.getCardReader();
+          for (const [index, code] of q.overlayCards.entries()) {
+            const base = readCardWithReader(reader, code);
+            if (!base) throw new Error(`Missing XYZ material in card database: ${code}`);
+            cards.push({
+              code, location: locationName(zone), sequence: q.sequence ?? 0, controller,
+              position: 'faceup', overlay_sequence: index, attribute: pickBit(base.attribute, ATTR),
+              race: pickBit(base.race, RACE), level: (base.level ?? 0) & 255, counter: 0,
+              negated: false, attack: base.attack ?? 0, defense: base.defense ?? 0, types: typeNames(base.type),
+            });
+            if (cards.length === 160) break outer;
+          }
+        }
+        const prefix = ({1:'',2:'h',4:'m',8:'s',16:'g',32:'r',64:'x'} as Record<number,string>)[zone];
+        const hidden = pi === 1 && (privateZone || (!!((q.position ?? 0) & 10) &&
+          !revealed.includes('o'+prefix+((q.sequence ?? 0)+1))));
+        if (hidden) {
+          cards.push({code:0,location:locationName(zone),sequence:q.sequence ?? 0,controller,
+            position:privateZone?'none':positionName(q.position),overlay_sequence:-1,
+            attribute:'none',race:'none',level:0,counter:0,negated:false,attack:0,defense:0,types:[]});
+          if (cards.length === 160) break outer;
+          continue;
+        }
         cards.push({
           code: q.code ?? 0,
           location: locationName(q.location ?? loc),
@@ -192,7 +225,7 @@ export async function buildFieldSnapshot(
           defense: (q.linkMarker ?? 0) > 0 ? q.linkMarker : (q.defense ?? 0),
           types: typeNames(q.type),
         });
-        if (cards.length >= 159) break outer;
+        if (cards.length === 160) break outer;
       }
     }
   }

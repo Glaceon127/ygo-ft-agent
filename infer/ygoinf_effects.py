@@ -4,8 +4,10 @@
 """
 import sqlite3
 from functools import lru_cache
+from pathlib import Path
+import os
 
-CDB = "/home/ygo/ygo-agent/assets/locale/en/cards.cdb"
+CDB = os.environ.get("YGOINF_CDB", str(Path("../assets/locale/en/cards.cdb").resolve()))
 
 
 def _hit(d, en, zh):
@@ -113,6 +115,12 @@ def _get_con():
     if _con is None:
         _con = sqlite3.connect(CDB, check_same_thread=False)
     return _con
+
+
+@lru_cache(maxsize=20000)
+def chain_effects(code):
+    row = _get_con().execute("SELECT desc FROM texts WHERE id=?", (code,)).fetchone()
+    return compute_effect_features(row[0] or '') if row else 0
 
 
 @lru_cache(maxsize=20000)

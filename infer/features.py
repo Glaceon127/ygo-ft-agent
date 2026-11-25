@@ -84,7 +84,7 @@ system_strings = [
 ]
 
 system_string_to_id = {
-    s: i + 16 for i, s in enumerate(system_strings)
+    s: i + 16 for i, s in enumerate(sorted(set(system_strings)))
 }
 
 code_to_id = {}
@@ -108,9 +108,7 @@ def init_code_list(code_list_file):
 
 
 def get_code_id(code):
-    if code not in code_to_id:
-        raise ValueError(f"Invalid code: {code}")
-    return code_to_id[code]
+    return code_to_id.get(code, 0)
 
 
 location_to_id = {
@@ -521,14 +519,43 @@ def get_spec(c: Card):
     ))
 
 
-def encode_cards(cards: List[Card]):
+def encode_cards(cards: List[Card], context=None):
     spec_infos = {}
     cards = cards[:2*MAX_CARDS]
     x = np.zeros((2*MAX_CARDS, N_CARD_FEATURES), dtype=np.uint8)
+    context = context or {}
+    names = context.get('public_hand', [])
+    slots = context.get('public_slots', {})
+    revealed = set(context.get('revealed', []))
+    hand_start = None
     for i, card in enumerate(cards):
-        x[i] = encode_card(card)
         spec = get_spec(card)
+        opponent = card.controller == Controller.opponent
+        if opponent and card.location in (Location.hand, Location.deck, Location.extra):
+            if card.location == Location.hand or not revealed:
+                x[i, 2] = location_to_id[card.location]
+                x[i, 4] = 1
+                if card.location == Location.hand:
+                    if hand_start is None: hand_start = i
+                    offset = i - hand_start
+                    if offset < len(names):
+                        x[i, :2] = int_transform(get_code_id(names[offset]))
+                continue
+        if (opponent and card.overlay_sequence == -1 and spec not in revealed and
+                card.position in (Position.facedown, Position.facedown_defense, Position.facedown_attack)):
+            x[i, 2] = location_to_id[card.location]
+            x[i, 3] = card.sequence + 1 if card.location in (Location.mzone, Location.szone, Location.grave) else 0
+            x[i, 4] = 1
+            pos = Position.facedown if card.location in (Location.deck,Location.extra) else card.position
+            x[i, 5] = position_to_id[pos]
+            spec_infos[spec] = (i + 1, 0)
+            continue
+        x[i] = encode_card(card)
         spec_infos[spec] = (i + 1, get_code_id(card.code))
+    if hand_start is not None:
+        for slot,code in slots.items():
+            if code in names:
+                spec_infos[f'oh{int(slot)+1}'] = (hand_start+names.index(code)+1,get_code_id(code))
     return x, spec_infos
 
 
@@ -639,7 +666,7 @@ def encode_action(action: LegalAction):
     elif effect >= CARD_EFFECT_OFFSET:
         effect = effect - CARD_EFFECT_OFFSET + 2
     else:
-        effect = system_string_to_id[effect]
+        effect = system_string_to_id.get(effect, 0)
     x[6] = effect
 
     x[7] = action_phase_to_id[action.phase]
@@ -780,6 +807,7 @@ def get_legal_actions(action_msg: ActionMsg) -> List[LegalAction]:
         msg: MsgSelectPosition = action_msg.data
         for pos in msg.positions:
             action = LegalAction(msg=MsgName.select_position)
+            action.card_id = get_code_id(msg.code)
             action.position = pos
             action.response = posotion_to_response(pos)
             actions.append(action)
@@ -935,6 +963,7 @@ def get_legal_actions(action_msg: ActionMsg) -> List[LegalAction]:
         msg: MsgSelectUnselectCard = action_msg.data
         for card in msg.selectable_cards:
             action = LegalAction(msg=MsgName.select_unselect_card)
+            action.card_id = get_code_id(card.code)
             action.response = card.response
             action.spec = to_spec(card.location)
             actions.append(action)
@@ -960,6 +989,7 @@ def get_legal_actions(action_msg: ActionMsg) -> List[LegalAction]:
         for i, spec in enumerate(specs):
             if i not in msg.selected:
                 action = LegalAction(msg=msg_name)
+                action.card_id = get_code_id(msg.cards[i].code)
                 action.response = responses[i]
                 action.spec = spec
                 actions.append(action)
@@ -1026,6 +1056,7 @@ def get_legal_actions(action_msg: ActionMsg) -> List[LegalAction]:
         for i, f in can_finish.items():
             action = LegalAction(msg=MsgName.select_sum)
             c = msg.cards[i]
+            action.card_id = get_code_id(c.code)
             action.response = c.response
             action.spec = to_spec(c.location)
             action.can_finish = f
@@ -1033,21 +1064,21 @@ def get_legal_actions(action_msg: ActionMsg) -> List[LegalAction]:
     return actions
 
 
-def encode_legal_actions(actions: List[LegalAction], spec_infos):
+def encode_legal_actions(actions: List[LegalAction], spec_infos, size=MAX_ACTIONS):
     # 原来无条件 print(actions[0].msg)：一是空候选时直接 IndexError -> 500，
     # 二是每步都刷一行。候选超过 MAX_ACTIONS 时后面那些动作模型根本看不到
     # （probs 会被 revert_pad_truncate 补成 -1），必须留下可观测的告警。
     if not actions:
         raise ValueError("empty legal actions")
-    if len(actions) > MAX_ACTIONS:
+    if len(actions) > size:
         print("[warn] legal actions truncated: %d -> %d (%s)" % (
             len(actions), MAX_ACTIONS, actions[0].msg), flush=True)
-    actions = actions[:MAX_ACTIONS]
-    x = np.zeros((MAX_ACTIONS, N_ACTION_FEATURES), dtype=np.uint8)
+    actions = actions[:size]
+    x = np.zeros((size, N_ACTION_FEATURES), dtype=np.uint8)
     for i, action in enumerate(actions):
         card_index, card_id = find_spec_info(spec_infos, action.spec)
         action.card_index = card_index
-        if action.card_id == 0:
+        if action.card_id == 0 or action.spec.startswith('oh'):
             action.card_id = card_id
         x[i] = encode_action(action)
     return x
@@ -1103,19 +1134,21 @@ def add_skipped_back(probs, legal_actions, action_msg: ActionMsg):
                 i for i, c in enumerate(action_msg.data.cards)
                 if c.response not in responses
             ]
-            for i in skipped:
+            for i in sorted(skipped):
                 probs.insert(i, -1)
                 responses.insert(i, action_msg.data.cards[i].response)
                 can_finish.insert(i, False)
         else:
             skipped = action_msg.data.selected
-            for i in skipped:
+            for i in sorted(skipped):
                 probs.insert(i, -1)
                 responses.insert(i, action_msg.data.cards[i].response)
+                can_finish.insert(i, False)
             if len(probs) == len(action_msg.data.cards):
                 # finish
                 probs.append(-1)
                 responses.append(-1)
+                can_finish.append(False)
     return probs, responses, can_finish
 
 
@@ -1140,6 +1173,8 @@ class HistoryActions:
         return encode_history_actions(self.h_actions, self.ha_p, turn)
 
     def update(self, action: np.ndarray, turn: int, phase: Phase):
+        if action[4] == action_act_to_id[ActionAct.cancel]:
+            return
         self.ha_p -= 1
         if self.ha_p < 0:
             self.ha_p = self.h_actions.shape[0] - 1
@@ -1154,6 +1189,7 @@ class PredictState:
     def __init__(self):
         self.rstate = init_rstate()
         self.index = 0
+        self.ran_model = False
         self.history_actions = HistoryActions()
 
         self.reset()
@@ -1206,9 +1242,12 @@ def predict(model_fn, input: Input, prev_action_idx, state: PredictState):
             a.target_relation = _target_relation(a.spec, chain_entries)
     n_actions = len(legal_actions)
 
-    cards, spec_infos = encode_cards(input.cards)
+    context = input.global_.chain_info or {}
+    native = getattr(getattr(model_fn, '__self__', None), 'native_policy', False)
+    cards, spec_infos = encode_cards(input.cards, context)
     global_ = encode_global(input.global_, input.cards)
-    actions = encode_legal_actions(legal_actions, spec_infos)
+    size = 64 if native and n_actions > MAX_ACTIONS else MAX_ACTIONS
+    actions = encode_legal_actions(legal_actions, spec_infos, size)
     # feat(31): 未屏蔽的 Activate 候选数量
     n_act = sum(1 for a in legal_actions if a.act == ActionAct.activate)
     global_[31] = min(n_act, 15)
@@ -1219,7 +1258,16 @@ def predict(model_fn, input: Input, prev_action_idx, state: PredictState):
         "actions_": actions,
         "h_actions_": h_actions,
     }
-    if n_actions == 1:
+    if native:
+        from .native_features import extra_inputs
+        model_input.update(extra_inputs(context, input.cards, legal_actions, size))
+        if chain_entries:
+            categories = [card_effects(e['code']) for e in chain_entries]
+            global_[26] = any(c & 0x10004000 for c in categories)
+            global_[27] = any(c & 1 for c in categories)
+    continuing_selection = bool(getattr(input.action_msg.data, 'selected', [])) and state.ran_model
+    run_model = n_actions != 1 or (native and continuing_selection)
+    if not run_model:
         probs = [1.0]
         responses = [legal_actions[0].response]
         win_rate = -1
@@ -1230,8 +1278,8 @@ def predict(model_fn, input: Input, prev_action_idx, state: PredictState):
         probs = revert_pad_truncate(probs, n_actions)
         assert len(probs) == n_actions
         probs, responses, can_finish = add_skipped_back(probs, legal_actions, input.action_msg)
-        win_rate = (value + 1) / 2
-    assert len(probs) == len(responses)
+        win_rate = (value + 1) / 2 if value is not None else -1
+    assert len(probs) == len(responses) == len(can_finish)
     preds = [
         ActionPredict(prob=prob, response=response, can_finish=f)
         for prob, response, f in zip(probs, responses, can_finish)
@@ -1241,6 +1289,7 @@ def predict(model_fn, input: Input, prev_action_idx, state: PredictState):
         win_rate=win_rate,
     )
     state.record(input, actions, probs)
+    state.ran_model = run_model
     state.index += 1
     return predict_results
 
@@ -1255,6 +1304,23 @@ class Predictor:
     
     @staticmethod
     def load(checkpoint, num_threads):
+        if checkpoint.endswith('swordsoul_counter_head.json'):
+            from pathlib import Path
+            import sys
+            project = Path(checkpoint).resolve().parents[3]
+            sys.path.insert(0,str(project))
+            from _swordsoul_counter import SwordsoulPolicy, HEAD
+            from scipy.special import softmax
+            if Path(checkpoint).resolve() != HEAD.resolve():
+                raise ValueError('Unexpected counter head path')
+            table = np.array([id_to_code[i] for i in range(len(id_to_code))])
+            loaded = SwordsoulPolicy.load(table)
+            def score(policy, state, frame):
+                state, logits, _, _ = policy.forward(frame,state)
+                return state,softmax(logits).tolist(),None
+            predictor = Predictor(loaded,score)
+            predictor.native_policy = True
+            return predictor
         sample_obs = sample_input()
         rstate = init_rstate()
         if checkpoint.endswith(".flax_model"):

@@ -189,6 +189,7 @@ class MsgSelectIdleCmd(BaseModel):
 
 
 class SelectSumCard(BaseModel):
+    code: int = 0
     location: CardLocation
     level1: int
     level2: int
@@ -207,6 +208,7 @@ class MsgSelectSum(BaseModel):
 
 
 class SelectTributeCard(BaseModel):
+    code: int = 0
     location: CardLocation
     level: int
     response: int
@@ -222,6 +224,7 @@ class MsgSelectTribute(BaseModel):
 
 
 class SelectAbleCard(BaseModel):
+    code: int = 0
     location: CardLocation
     response: int
 
@@ -385,6 +388,7 @@ class MsgName(Enum):
 
 
 class SelectUnselectCard(BaseModel):
+    code: int = 0
     location: CardLocation
     response: int
 

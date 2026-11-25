@@ -1,0 +1,177 @@
+--- a/duel.cpp
++++ b/duel.cpp
+@@ -145,6 +145,10 @@
+ }
+ void duel::set_responsei(int32_t resp) {
+ 	game_field->returns.ivalue[0] = resp;
++	if (getenv("WB_DEBUG_RESP")) {
++		fprintf(stderr, "[wb] set_responsei(%d) -> ivalue[0]=%d\n",
++			resp, game_field->returns.ivalue[0]);
++	}
+ }
+ void duel::set_responseb(uint8_t* resp) {
+ 	std::memcpy(game_field->returns.bvalue, resp, SIZE_RETURN_VALUE);
+--- a/playerop.cpp
++++ b/playerop.cpp
+@@ -156,6 +156,10 @@
+ 	} else {
+ 		uint32_t t = (uint32_t)returns.ivalue[0] & 0xffff;
+ 		uint32_t s = (uint32_t)returns.ivalue[0] >> 16;
++		if (getenv("WB_DEBUG_RESP")) {
++			fprintf(stderr, "[wb] idlecmd step1 ivalue=%d t=%u s=%u to_ep=%d\n",
++				returns.ivalue[0], t, s, (int)core.to_ep);
++		}
+ 		if(t > 8
+ 			|| (t == 0 && s >= core.summonable_cards.size())
+ 			|| (t == 1 && s >= core.spsummonable_cards.size())
+--- a/processor.cpp
++++ b/processor.cpp
+@@ -6,6 +6,8 @@
+  */
+ 
+ #include "field.h"
++#include <cstdio>
++#include <cstdlib>
+ #include "duel.h"
+ #include "card.h"
+ #include "group.h"
+@@ -71,6 +73,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -80,6 +85,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -89,6 +97,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -98,6 +109,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -107,6 +121,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -116,6 +133,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -125,6 +145,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -134,6 +157,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -144,6 +170,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -153,6 +182,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -162,6 +194,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -171,6 +206,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -180,6 +218,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}
+@@ -189,6 +230,9 @@
+ 			return pduel->buffer_size();
+ 		} else {
+ 			it->step = 1;
++			if (getenv("WB_DEBUG_RESP"))
++				fprintf(stderr, "[wb] WAIT type=%d step=%d buf=%u\n",
++					(int)it->type, (int)it->step, (unsigned)pduel->buffer_size());
+ 			return PROCESSOR_WAITING | pduel->buffer_size();
+ 		}
+ 	}

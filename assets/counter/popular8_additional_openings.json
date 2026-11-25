@@ -1,0 +1,146 @@
+[
+  {
+    "family": "Blitzclique",
+    "source": 37654623,
+    "slot": 2,
+    "zone": 4,
+    "response": 59438930,
+    "seed": 5710010,
+    "post": "6aee8aa4d222a0de1ef88bf5"
+  },
+  {
+    "family": "Rikka",
+    "source": 53286626,
+    "slot": 0,
+    "zone": 4,
+    "response": 14558127,
+    "seed": 5710005,
+    "post": "6a2dde8e7735228f073965d7"
+  },
+  {
+    "family": "Dracotail",
+    "source": 32548318,
+    "slot": 0,
+    "zone": 4,
+    "response": 14558127,
+    "seed": 5710006,
+    "post": "6a2c6cd293fed5d17a3197b2"
+  },
+  {
+    "family": "Yummy",
+    "source": 31425736,
+    "slot": 2,
+    "zone": 3,
+    "response": 14558127,
+    "seed": 5710003,
+    "post": "6a0a168a340cdb99e82c0723"
+  },
+  {
+    "family": "Witchcrafter",
+    "source": 32353566,
+    "slot": 1,
+    "zone": 4,
+    "response": 59438930,
+    "seed": 5710011,
+    "post": "6ab8236abc9436a3d25615bd"
+  },
+  {
+    "family": "Invoked",
+    "source": 86120751,
+    "slot": 2,
+    "zone": 3,
+    "response": 10045474,
+    "seed": 5710006,
+    "post": "6add94f9336105dd632ff246"
+  },
+  {
+    "family": "Invoked",
+    "source": 86120751,
+    "slot": 2,
+    "zone": 3,
+    "response": 97268402,
+    "seed": 5710007,
+    "post": "6add94f9336105dd632ff246"
+  },
+  {
+    "family": "Invoked",
+    "source": 57294268,
+    "slot": 2,
+    "zone": 3,
+    "response": 10045474,
+    "seed": 5710002,
+    "post": "6add94f9336105dd632ff246"
+  },
+  {
+    "family": "Invoked",
+    "source": 57294268,
+    "slot": 2,
+    "zone": 3,
+    "response": 97268402,
+    "seed": 5710004,
+    "post": "6add94f9336105dd632ff246"
+  },
+  {
+    "family": "DarkMagician",
+    "source": 41350417,
+    "slot": 1,
+    "zone": 4,
+    "response": 14558127,
+    "seed": 5710000,
+    "post": "6aee8c9fc0bd14be1bd492ad"
+  },
+  {
+    "family": "Branded",
+    "source": 44362883,
+    "slot": 0,
+    "zone": 4,
+    "response": 14558127,
+    "seed": 5710005,
+    "post": "6a20bd0139a5d92345c9fd03"
+  },
+  {
+    "family": "Branded",
+    "source": 29948294,
+    "slot": 1,
+    "zone": 4,
+    "response": 14558127,
+    "seed": 5710008,
+    "post": "6a0b8e2912a8dc5710ed0d64"
+  },
+  {
+    "family": "Branded",
+    "source": 1984618,
+    "slot": 0,
+    "zone": 4,
+    "response": 14558127,
+    "seed": 5710002,
+    "post": "6a0b8e2912a8dc5710ed0d64"
+  },
+  {
+    "family": "Branded",
+    "source": 73819701,
+    "slot": 2,
+    "zone": 3,
+    "response": 10045474,
+    "seed": 5710009,
+    "post": "6a0b895482003fd441bf523d"
+  },
+  {
+    "family": "Branded",
+    "source": 73819701,
+    "slot": 2,
+    "zone": 3,
+    "response": 97268402,
+    "seed": 5710071,
+    "post": "6a0b895482003fd441bf523d"
+  },
+  {
+    "family": "Branded",
+    "source": 73819701,
+    "slot": 2,
+    "zone": 3,
+    "response": 14558127,
+    "seed": 5710010,
+    "post": "6a0b8e2912a8dc5710ed0d64"
+  }
+]

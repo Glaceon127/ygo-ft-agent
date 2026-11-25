@@ -17,7 +17,6 @@ import jax
 import jax.numpy as jnp
 import flax
 
-sys.path.insert(0, "/home/ygo")
 
 # ---- 做场统计用的 card id（= code_list.txt 行号）----
 # 讲述者 4026187 / 编写者 78021082 / 威凯特 27632520
@@ -84,10 +83,7 @@ def _track_counts(obs, acc):
 
 from ygoai.utils import init_ygopro
 from ygoai.rl.utils import RecordEpisodeStatistics, EnvPreprocess
-from yai.belief import DEFAULT_KEY_CARDS, BeliefEngine
-from yai.cards import CardIndex
-from yai.jax_belief import install_belief_fusion
-from yai.obs import BeliefBatchAdapter, BeliefEvalWrapper
+from ygoai.rl.env import ChainEffectObservation
 from ygoai.rl.jax.agent import RNNAgent, ModelArgs
 
 
@@ -163,50 +159,17 @@ class Args:
     因此 agent2 要用自己的宽度初始化，并在推理时截断 obs。"""
 
 
-def load_checkpoint_into(target, path, extra_prefix="BeliefEncoder"):
-    """把 checkpoint 读进 target 参数树，允许 target 多出信念子树或维度不一致。"""
-    with open(path, "rb") as f:
-        raw = f.read()
+import ygoai.rl.jax.ckpt as _ckpt_mod
 
-    params = target["params"] if "params" in target else target
-    extra_keys = [k for k in params if str(k).startswith(extra_prefix)]
-    if not extra_keys:
-        return flax.serialization.from_bytes(target, raw)
 
-    state = flax.serialization.msgpack_restore(raw)
-    ckpt_params = state.get("params", state)
-    ckpt_extra = {k: v for k, v in ckpt_params.items()
-                  if str(k).startswith(extra_prefix)}
-
-    compatible = False
-    if ckpt_extra:
-        try:
-            ck_kernel = ckpt_extra[extra_keys[0]]["belief_proj"]["kernel"]
-            tg_kernel = params[extra_keys[0]]["belief_proj"]["kernel"]
-            compatible = getattr(ck_kernel, "shape", None) == tg_kernel.shape
-        except (KeyError, TypeError):
-            compatible = False
-
-    if compatible:
-        return flax.serialization.from_bytes(target, raw)
-
-    base = dict(target)
-    base_params = {k: v for k, v in params.items()
-                   if not str(k).startswith(extra_prefix)}
-    base["params"] = base_params
-    loaded = flax.serialization.from_bytes(base, raw)
-
-    merged = dict(params)
-    merged.update(loaded["params"])
-    out = dict(target)
-    out["params"] = merged
-    if "batch_stats" in target and "batch_stats" in loaded:
-        out["batch_stats"] = loaded["batch_stats"]
-    return out
+def load_checkpoint_into(target, path, extra_prefix=None):
+    """宽松加载：missing/形状不符的键保留初始化值（见 ygoai.rl.jax.ckpt）。"""
+    return _ckpt_mod.load_checkpoint_into(target, path)
 
 
 def create_agent1(args):
     return RNNAgent(
+        ash_g_ids=args.m1.ash_g_ids(args.code_list_file),
         **asdict(args.m1),
         embedding_shape=args.num_embeddings,
     )
@@ -214,6 +177,7 @@ def create_agent1(args):
 
 def create_agent2(args):
     return RNNAgent(
+        ash_g_ids=args.m2.ash_g_ids(args.code_list_file),
         **asdict(args.m2),
         embedding_shape=args.num_embeddings,
     )
@@ -227,6 +191,10 @@ if __name__ == "__main__":
 
     use_belief = args.use_belief1 or args.use_belief2
     if use_belief:
+        from yai.belief import DEFAULT_KEY_CARDS, BeliefEngine
+        from yai.cards import CardIndex
+        from yai.jax_belief import install_belief_fusion
+        from yai.obs import BeliefBatchAdapter, BeliefEvalWrapper
         install_belief_fusion()
         print(f"belief fusion installed (dim={len(DEFAULT_KEY_CARDS)})")
 
@@ -272,15 +240,21 @@ if __name__ == "__main__":
         verbose=args.verbose,
         record=args.record,
     )
+    chain_effect_features = args.m1.uses_chain_effect_slots or args.m2.uses_chain_effect_slots
+    if chain_effect_features:
+        env_option["chain_effect_probe"] = True
     envs = ygoenv.make(
         task_id=args.env_id,
         n_history_actions=args.n_history_actions,
         deck1=args.deck1,
         deck2=args.deck2,
         oppo_info=args.oppo_info,
+        battle_features=args.m1.battle_features or args.m2.battle_features,
         **env_option,
     )
     envs.num_envs = num_envs
+    if chain_effect_features:
+        envs = ChainEffectObservation(envs)
     envs = EnvPreprocess(envs, skip_mask=not args.oppo_info)
 
     key = jax.random.PRNGKey(seed)
@@ -303,7 +277,7 @@ if __name__ == "__main__":
     params1 = jax.jit(agent1.init)(key, sample_obs, rstate1)
     params1 = load_checkpoint_into(params1, args.checkpoint1)
 
-    if args.checkpoint1 == args.checkpoint2:
+    if args.checkpoint1 == args.checkpoint2 and args.m1 == args.m2 and not args.cards_w2:
         agent2 = agent1
         params2 = params1
     else:
@@ -430,13 +404,21 @@ if __name__ == "__main__":
     mn2_tail = mn2_start = 0
     mn1_tail = mn1_start = 0
     ma_sel = ma_size = ma_start = ma_tail = 0
+    hist = Counter()
     ps_cand = ps_pick = pt_cand = pt_pick = 0
+    pk_kg = pk_fd = pk_mg = pk_sn = 0
+    nz_win = nz_act = 0
+    nz_ep_win = []
+    nz_ep_act = []
+    nz_win_b = {1: 0, 2: 0, 3: 0}
+    nz_act_b = {1: 0, 2: 0, 3: 0}
     _id2code = {}
     try:
         for _i, _l in enumerate(open("code_list.txt", encoding="utf-8", errors="replace"), 1):
             _c = _l.strip()
             if _c:
-                _id2code[_i] = _c
+                # code_list.txt 每行是 "code has_script"，只取卡号
+                _id2code[_i] = _c.split()[0]
     except OSError:
         pass
     _CARD_NAME = {
@@ -485,6 +467,7 @@ if __name__ == "__main__":
         if isinstance(infos, dict):
             for _k in ("rename_win", "rename_hit", "rename_clr",
                        "sel_gyoku", "pick_gyoku", "obs_gyoku",
+                       "obs_spec_fill",
                        "gyoku_id", "rn_live",
                        "gyoku_grave0", "gyoku_grave1",
                        "story_summon0", "story_summon1",
@@ -548,6 +531,21 @@ if __name__ == "__main__":
             ps_pick += int(np.asarray(infos.get("pair_start_pick", 0)).sum())
             pt_cand += int(np.asarray(infos.get("pair_tail_cand", 0)).sum())
             pt_pick += int(np.asarray(infos.get("pair_tail_pick", 0)).sum())
+            pk_kg += int(np.asarray(infos.get("pair_kg_cand", 0)).sum())
+            pk_fd += int(np.asarray(infos.get("pair_fd_cand", 0)).sum())
+            pk_mg += int(np.asarray(infos.get("pair_mg_cand", 0)).sum())
+            pk_sn += int(np.asarray(infos.get("pair_sn_cand", 0)).sum())
+            nz_win += int(np.asarray(infos.get("nz_win", 0)).sum())
+            nz_act += int(np.asarray(infos.get("nz_act", 0)).sum())
+            for _b in (1, 2, 3):
+                nz_win_b[_b] += int(np.asarray(infos.get(f"nz_win_{_b}", 0)).sum())
+                nz_act_b[_b] += int(np.asarray(infos.get(f"nz_act_{_b}", 0)).sum())
+            for _hk in ("hist_11", "hist_22", "hist_12", "hist_xx",
+                        "hist_p1", "hist_p2", "hist_p3", "hist_p4p",
+                        "hist_unk",
+                        "w12_all_win", "w12_all_p1", "w12_all_p2",
+                        "w12_m7_win", "w12_m7_p1", "w12_m7_p2"):
+                hist[_hk] += int(np.asarray(infos.get(_hk, 0)).sum())
 
         _start = time.time()
         main = next_to_play == main_player
@@ -586,6 +584,11 @@ if __name__ == "__main__":
             episode_reward = infos['r'][idx]
             main_reward = episode_reward * pl
             win = int(main_reward > 0)
+            _nzw = infos.get('nz_win')
+            _nza = infos.get('nz_act')
+            if _nzw is not None:
+                nz_ep_win.append(int(np.asarray(_nzw).reshape(-1)[idx]))
+                nz_ep_act.append(int(np.asarray(_nza).reshape(-1)[idx]))
 
             win_player = 0 if (to_play[idx] == 0 and episode_reward > 0) or (to_play[idx] == 1 and episode_reward < 0) else 1
             win_players.append(win_player)
@@ -680,11 +683,58 @@ if __name__ == "__main__":
         print(f"mill_any: sel={ma_sel}  avg_size={ma_size / ma_sel:.1f}  "
               f"含START={ma_start} ({100.0 * ma_start / ma_sel:.1f}%)  "
               f"含TAIL={ma_tail} ({100.0 * ma_tail / ma_sel:.1f}%)")
+    _h_sel = hist["hist_11"] + hist["hist_22"] + hist["hist_12"] + hist["hist_xx"]
+    if _h_sel:
+        _p1, _p2, _p3, _p4 = (hist["hist_p1"], hist["hist_p2"],
+                              hist["hist_p3"], hist["hist_p4p"])
+        _multi = hist["hist_22"] + hist["hist_12"] + hist["hist_xx"]
+        print(f"hist(卡组选卡, 含妖精传姬): sel={_h_sel}  "
+              f"(1,1)={hist['hist_11']} ({100.0 * hist['hist_11'] / _h_sel:.1f}%)  "
+              f"(2,2)={hist['hist_22']} ({100.0 * hist['hist_22'] / _h_sel:.1f}%)  "
+              f"(1,2)={hist['hist_12']}  other={hist['hist_xx']}  "
+              f"unknown={hist['hist_unk']}")
+        print(f"  pool: 1={_p1} ({100.0 * _p1 / _h_sel:.1f}%)  2={_p2}  "
+              f"3={_p3}  >=4={_p4} ({100.0 * _p4 / _h_sel:.1f}%)  |  "
+              f"多选(max>=2)={_multi} ({100.0 * _multi / max(1, _h_sel):.1f}%)")
+    if hist["w12_all_win"] or hist["w12_m7_win"]:
+        _w = hist["w12_all_win"]
+        _m = hist["w12_m7_win"]
+        print(f"w12(1,2窗口): 全部 win={_w} 选1={hist['w12_all_p1']} "
+              f"选2={hist['w12_all_p2']}  |  m7素材 win={_m} "
+              f"选1={hist['w12_m7_p1']} 选2={hist['w12_m7_p2']}")
+    if nz_ep_win:
+        _n = len(nz_ep_win)
+        _tot = sum(nz_ep_win)
+        print(f"nz 每局: 窗口={_tot / max(1, _n):.2f}  发动={sum(nz_ep_act) / max(1, _n):.2f} "
+              f"({100.0 * sum(nz_ep_act) / max(1, _tot):.1f}%)  局数={_n}")
+
+    if nz_win:
+        _nz = "  ".join(
+            f"{_b}环 {nz_act_b[_b]}/{nz_win_b[_b]}="
+            f"{100.0 * nz_act_b[_b] / max(1, nz_win_b[_b]):.1f}%"
+            for _b in (1, 2, 3) if nz_win_b[_b])
+        print(f"nz(连锁对抗窗口): 窗口={nz_win} 发动={nz_act} "
+              f"({100.0 * nz_act / max(1, nz_win):.1f}%)  |  {_nz}")
+
     if ps_cand or pt_cand:
         print(f"pair: START 可选={ps_cand} 选中={ps_pick} "
               f"({100.0 * ps_pick / max(1, ps_cand):.1f}%)  |  "
               f"TAIL 可选={pt_cand} 选中={pt_pick} "
               f"({100.0 * pt_pick / max(1, pt_cand):.1f}%)")
+
+    _mills = {}
+    for _mid, _cnt in mill_counter.items():
+        _cd = _id2code.get(_mid, "?")
+        _mills[_cd] = _mills.get(_cd, 0) + _cnt
+    _rows = [("辉夜", "86937530", pk_kg), ("场地", "56725612", pk_fd),
+             ("玛奇莉", "19144622", pk_mg), ("TAIL", "82119326", pt_cand),
+             ("START", "19326613", ps_cand), ("白雪", "55623480", pk_sn)]
+    _parts = []
+    for _nm, _cd, _ca in _rows:
+        _pk = _mills.get(_cd, 0)
+        _rate = (100.0 * _pk / _ca) if _ca else 0.0
+        _parts.append(f"{_nm} {_pk}/{_ca}={_rate:.1f}%")
+    print("条件选取率: " + "  ".join(_parts))
 
     for _name, _flag in (("START", ep_start_flag), ("TAIL", ep_tail_flag)):
         _a = [p for f, p in zip(_flag, ep_term_peak) if f]
@@ -725,6 +775,9 @@ if __name__ == "__main__":
             rn.get("pick_gyoku", 0), rn.get("pick_gyoku", 0) / _n))
         print("gyoku_id(+2937 映射): %d   rn_live(映射条目数): %d" % (
             rn.get("gyoku_id", 0), rn.get("rn_live", 0)))
+    if rn.get("obs_spec_fill"):
+        print("obs_spec_fill: 观测里仍需 spec 反查的候选 %d 条（§159.9 复核应为 0）" %
+              rn.get("obs_spec_fill", 0))
     _as = rn.get("atk_seen", 0)
     _ac = rn.get("atk_changed", 0)
     _dc = rn.get("def_changed", 0)

@@ -1,0 +1,416 @@
+{
+  "date": "2026-11-25",
+  "parent": "u586",
+  "final": "u1172",
+  "parent_sha256": "3cde20a526e29bfa7e372e0d05b562e33739a2bad5c033d4e7e46813eabc69a4",
+  "sha256": "ae99ee79b3519c9ffcd22f73776f237f3de59102f19cfe402bcd5fea063b32e6",
+  "bytes": 77142196,
+  "arrays": 164,
+  "values": 19283982,
+  "global_step": 78292352,
+  "updates": 1172,
+  "environment_steps": 6000640,
+  "fixed_windows": {
+    "cases": 55,
+    "parent": 42,
+    "final": 54
+  },
+  "fresh_windows": {
+    "cases": 31,
+    "parent": 27,
+    "final": 30
+  },
+  "swordsoul": {
+    "cases": 72,
+    "parent": 72,
+    "final": 72
+  },
+  "mirror": {
+    "games": 40,
+    "wins": 21
+  },
+  "g_starting_hands": {
+    "parent": {
+      "games": 8,
+      "wins": 4,
+      "draws": 7
+    },
+    "final": {
+      "games": 8,
+      "wins": 7,
+      "draws": 8
+    }
+  },
+  "neko": {
+    "games": 40,
+    "wins": 24,
+    "first_wins": 9,
+    "second_wins": 15,
+    "issues": [],
+    "fallback_games": 9,
+    "fallbacks": 9,
+    "responses": 17643
+  },
+  "neko_games": [
+    {
+      "round": 1,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 270,
+      "fallback": 1
+    },
+    {
+      "round": 2,
+      "first": true,
+      "won": false,
+      "turns": 2,
+      "reason": 1,
+      "responses": 211,
+      "fallback": 0
+    },
+    {
+      "round": 3,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 195,
+      "fallback": 0
+    },
+    {
+      "round": 4,
+      "first": true,
+      "won": false,
+      "turns": 12,
+      "reason": 1,
+      "responses": 888,
+      "fallback": 0
+    },
+    {
+      "round": 5,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 186,
+      "fallback": 0
+    },
+    {
+      "round": 6,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 294,
+      "fallback": 1
+    },
+    {
+      "round": 7,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 422,
+      "fallback": 0
+    },
+    {
+      "round": 8,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 248,
+      "fallback": 0
+    },
+    {
+      "round": 9,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 396,
+      "fallback": 0
+    },
+    {
+      "round": 10,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 245,
+      "fallback": 0
+    },
+    {
+      "round": 11,
+      "first": false,
+      "won": false,
+      "turns": 7,
+      "reason": 1,
+      "responses": 683,
+      "fallback": 1
+    },
+    {
+      "round": 12,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 415,
+      "fallback": 0
+    },
+    {
+      "round": 13,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 313,
+      "fallback": 0
+    },
+    {
+      "round": 14,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 484,
+      "fallback": 1
+    },
+    {
+      "round": 15,
+      "first": false,
+      "won": true,
+      "turns": 4,
+      "reason": 1,
+      "responses": 179,
+      "fallback": 0
+    },
+    {
+      "round": 16,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 545,
+      "fallback": 1
+    },
+    {
+      "round": 17,
+      "first": false,
+      "won": false,
+      "turns": 3,
+      "reason": 1,
+      "responses": 344,
+      "fallback": 0
+    },
+    {
+      "round": 18,
+      "first": true,
+      "won": false,
+      "turns": 6,
+      "reason": 1,
+      "responses": 305,
+      "fallback": 0
+    },
+    {
+      "round": 19,
+      "first": false,
+      "won": true,
+      "turns": 8,
+      "reason": 1,
+      "responses": 379,
+      "fallback": 0
+    },
+    {
+      "round": 20,
+      "first": true,
+      "won": false,
+      "turns": 6,
+      "reason": 1,
+      "responses": 710,
+      "fallback": 0
+    },
+    {
+      "round": 21,
+      "first": false,
+      "won": false,
+      "turns": 3,
+      "reason": 1,
+      "responses": 346,
+      "fallback": 0
+    },
+    {
+      "round": 22,
+      "first": true,
+      "won": false,
+      "turns": 6,
+      "reason": 1,
+      "responses": 367,
+      "fallback": 0
+    },
+    {
+      "round": 23,
+      "first": false,
+      "won": false,
+      "turns": 5,
+      "reason": 1,
+      "responses": 409,
+      "fallback": 0
+    },
+    {
+      "round": 24,
+      "first": true,
+      "won": true,
+      "turns": 3,
+      "reason": 1,
+      "responses": 354,
+      "fallback": 0
+    },
+    {
+      "round": 25,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 280,
+      "fallback": 1
+    },
+    {
+      "round": 26,
+      "first": true,
+      "won": false,
+      "turns": 4,
+      "reason": 1,
+      "responses": 380,
+      "fallback": 0
+    },
+    {
+      "round": 27,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 436,
+      "fallback": 1
+    },
+    {
+      "round": 28,
+      "first": true,
+      "won": false,
+      "turns": 2,
+      "reason": 1,
+      "responses": 141,
+      "fallback": 0
+    },
+    {
+      "round": 29,
+      "first": false,
+      "won": true,
+      "turns": 8,
+      "reason": 1,
+      "responses": 939,
+      "fallback": 0
+    },
+    {
+      "round": 30,
+      "first": true,
+      "won": false,
+      "turns": 6,
+      "reason": 1,
+      "responses": 548,
+      "fallback": 0
+    },
+    {
+      "round": 31,
+      "first": false,
+      "won": true,
+      "turns": 4,
+      "reason": 1,
+      "responses": 607,
+      "fallback": 0
+    },
+    {
+      "round": 32,
+      "first": true,
+      "won": false,
+      "turns": 2,
+      "reason": 1,
+      "responses": 174,
+      "fallback": 0
+    },
+    {
+      "round": 33,
+      "first": false,
+      "won": false,
+      "turns": 3,
+      "reason": 1,
+      "responses": 716,
+      "fallback": 0
+    },
+    {
+      "round": 34,
+      "first": true,
+      "won": false,
+      "turns": 4,
+      "reason": 1,
+      "responses": 340,
+      "fallback": 0
+    },
+    {
+      "round": 35,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 272,
+      "fallback": 0
+    },
+    {
+      "round": 36,
+      "first": true,
+      "won": false,
+      "turns": 16,
+      "reason": 1,
+      "responses": 1343,
+      "fallback": 0
+    },
+    {
+      "round": 37,
+      "first": false,
+      "won": true,
+      "turns": 2,
+      "reason": 1,
+      "responses": 394,
+      "fallback": 0
+    },
+    {
+      "round": 38,
+      "first": true,
+      "won": true,
+      "turns": 7,
+      "reason": 1,
+      "responses": 432,
+      "fallback": 0
+    },
+    {
+      "round": 39,
+      "first": false,
+      "won": true,
+      "turns": 4,
+      "reason": 1,
+      "responses": 641,
+      "fallback": 1
+    },
+    {
+      "round": 40,
+      "first": true,
+      "won": true,
+      "turns": 5,
+      "reason": 1,
+      "responses": 812,
+      "fallback": 1
+    }
+  ]
+}

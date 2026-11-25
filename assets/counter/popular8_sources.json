@@ -1,0 +1,1178 @@
+{
+  "posts": [
+    {
+      "id": "6aee8c9fc0bd14be1bd492ad",
+      "family": "Dark Magician",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "High"
+        },
+        {
+          "card": "Dominus Impulse",
+          "impact": "High"
+        },
+        {
+          "card": "Dominus Purge",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6b0464bda37c85824047a129",
+      "family": "Blitzclique",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6b04640cb34063074a0dcae0",
+      "family": "Blitzclique",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dominus Impulse",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6aee8ad42f9db6e9e14241fd",
+      "family": "Blitzclique",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6aee8aa4d222a0de1ef88bf5",
+      "family": "Blitzclique",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6add94f9336105dd632ff246",
+      "family": "Invoked",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence"
+        },
+        {
+          "card": "Effect Veiler"
+        }
+      ]
+    },
+    {
+      "id": "6add93f285bb7cb1bf6c1749",
+      "family": "Invoked",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird"
+        },
+        {
+          "card": "Mulcharmy Fuwalos"
+        },
+        {
+          "card": "Maxx \"C\""
+        }
+      ]
+    },
+    {
+      "id": "6ab82bf4149d30db0e5079a2",
+      "family": "Witchcrafter",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "High"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Backfire"
+        },
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "Low"
+        },
+        {
+          "card": "Dominus Impulse",
+          "impact": "High"
+        },
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "High"
+        },
+        {
+          "card": "Dominus Spark",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6ab824718f5bd80338cfb44b",
+      "family": "Witchcrafter",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mind Scan",
+          "impact": "High"
+        },
+        {
+          "card": "The Fallen & The Virtuous"
+        },
+        {
+          "card": "Dominus Impulse",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6ab8236abc9436a3d25615bd",
+      "family": "Witchcrafter",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "High"
+        },
+        {
+          "card": "Veidos the Eruption Dragon of Extinction",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a8aef9513e427b3649b787a",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "D.D. Crow",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fcecbd5728bbdf430135c",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "PSY-Framegear Gamma",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fce81bb28f5bc6a925fed",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Purulia",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a5fce58e18c4237b9d94b76",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "Medium"
+        },
+        {
+          "card": "D.D. Crow",
+          "impact": "Medium"
+        },
+        {
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fce34b2e9684eb78e12a8",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "Medium"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Mourner & Moonlit Chill",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fce188895b3ac1a7acf1f",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fcdce5d60451f07747395",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a5fcda2311206941f33d382",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fcd842386b751ae906d74",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "Medium"
+        },
+        {
+          "card": "Dominus Purge",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fccd9450d2e1cdda0cb4a",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "PSY-Framegear Gamma",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fcc9a9ac96733fb681228",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "PSY-Framegear Gamma",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fcbe78270eaab3b7af606",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc9ab7202b3badebfb9f4",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc909bbdec2180dfc77ef",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc6d5bb28f5bc6a9246db",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "Medium"
+        },
+        {
+          "card": "Dominus Purge",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc46de956616f81f73a9e",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dimension Shifter",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc1f8d4c051d7601675a0",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Purulia",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc13cb589e0d9f4321dfa",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Fuwalos",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fc06ee18c4237b9d92099",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Fuwalos",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fbdf35aa960ace38b0b1e",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "Medium"
+        },
+        {
+          "card": "D.D. Crow",
+          "impact": "Medium"
+        },
+        {
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fbc413392f1137321638d",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fbaac13e774a9541ede95",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "Medium"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Mourner & Moonlit Chill",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a5fba38aea130ce4acf6c9e",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "PSY-Framegear Gamma",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a5fb8f1da0d75663c277770",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "PSY-Framegear Gamma",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a56aa8864540e5906878bbe",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a54198eb2df7f0191060393",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Red Reboot",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a3e5f9feb94576b570d903b",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Buster Blader, the Dragon Destroyer Swordsman",
+          "impact": "High"
+        },
+        {
+          "card": "Non-Fusion Area",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a353f637274ed808da3ef4e",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "The Fallen & The Virtuous",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a32a51019bb8aa174b42959",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Evenly Matched",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a323cdd34c2d314b27acdca",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a323ad0c662eac4a0409346",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Super Polymerization",
+          "impact": "Medium"
+        },
+        {
+          "card": "Secreterion Dragon"
+        }
+      ]
+    },
+    {
+      "id": "6a2de20ea5e190f2a64def92",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2de15b908be0a5fd116cd2",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Raigeki",
+          "impact": "Backfire"
+        },
+        {
+          "card": "Dark Hole",
+          "impact": "Backfire"
+        },
+        {
+          "card": "Lightning Storm",
+          "impact": "Backfire"
+        },
+        {
+          "card": "The Fallen & The Virtuous",
+          "impact": "Backfire"
+        }
+      ]
+    },
+    {
+      "id": "6a2de07bf5895d4c5d5c9eda",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Gameciel, the Sea Turtle Kaiju",
+          "impact": "Medium"
+        },
+        {
+          "card": "Lava Golem",
+          "impact": "Medium"
+        },
+        {
+          "card": "The Winged Dragon of Ra - Sphere Mode",
+          "impact": "Medium"
+        },
+        {
+          "card": "Dark Ruler No More",
+          "impact": "Medium"
+        },
+        {
+          "card": "Forbidden Droplet",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2ddfa7454c583e3feb65b0",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Super Polymerization",
+          "impact": "Backfire"
+        }
+      ]
+    },
+    {
+      "id": "6a2ddef576627fc55d3b1d29",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Purulia",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a2dde8e7735228f073965d7",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2ddd59984c7789f94bd8e5",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Medium"
+        },
+        {
+          "card": "Dimension Shifter",
+          "impact": "Medium"
+        },
+        {
+          "card": "Retaliating \"C\"",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2ddc0b3fb8ec35178e9a57",
+      "family": "Rikka",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Maxx \"C\"",
+          "impact": "High"
+        },
+        {
+          "card": "Mulcharmy Fuwalos",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a2c6cebcfa719ee7666c335",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "Medium"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Mourner & Moonlit Chill",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2c6cd293fed5d17a3197b2",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a2c5d10f6fa03331c0e4643",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Super Polymerization",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a2c297f0e0307b23141ff23",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Buster Blader, the Dragon Destroyer Swordsman",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a29cb466ab0d715e21bd2b5",
+      "family": "Dark Magician",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Nibiru, the Primal Being",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a2824d4291a6356e798a0cd",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Super Polymerization",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a24175e83a28180df794a9f",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Radiant Typhoon Krosea",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2363e400edc76bfef6caaf",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Ogre & Snow Rabbit",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a2363187cb0d5c8d2616198",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a23618a0dbc0c95b00a5b91",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "Medium"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a23604c960a954af47c2e6d",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "Backfire"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Backfire"
+        }
+      ]
+    },
+    {
+      "id": "6a22f8e591c9d6ca9a697b20",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dimensional Barrier",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a20bd0139a5d92345c9fd03",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring"
+        }
+      ]
+    },
+    {
+      "id": "6a1d082ed3987d7b6bb2d67e",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ghost Belle & Haunted Mansion",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a1cce251b0f742b18e2819c",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Bystial Magnamhut",
+          "impact": "High"
+        },
+        {
+          "card": "Bystial Druiswurm",
+          "impact": "High"
+        },
+        {
+          "card": "Bystial Saronir",
+          "impact": "High"
+        },
+        {
+          "card": "Bystial Baldrake",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a1ccc8705840fe83e0bffd2",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "The Fallen & The Virtuous",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a1cb87d96491e3c86a0091b",
+      "family": "Dark Magician",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0dce2e14d1e25c03aa7049",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Maxx \"C\"",
+          "impact": "Medium"
+        },
+        {
+          "card": "Mulcharmy Fuwalos",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a0dcd6a6804a1b13c4affbd",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Purulia",
+          "impact": "Backfire"
+        }
+      ]
+    },
+    {
+      "id": "6a0d322208ef282d1495d967",
+      "family": "Witchcrafter",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Artifact Lancea",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a0d2b4fbcc4e4b98ec2d363",
+      "family": "Witchcrafter",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b942912410df81009b91c",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dominus Impulse",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b90b86679c5b25fb76ca1",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dominus Purge",
+          "impact": "Medium"
+        },
+        {
+          "card": "Dominus Purge",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b8e2912a8dc5710ed0d64",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b895482003fd441bf523d",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Effect Veiler",
+          "impact": "High"
+        },
+        {
+          "card": "Infinite Impermanence",
+          "impact": "High"
+        },
+        {
+          "card": "Ghost Mourner & Moonlit Chill",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b38db2111c944045e6a17",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Purulia",
+          "impact": "Medium"
+        },
+        {
+          "card": "Mulcharmy Fuwalos",
+          "impact": "Medium"
+        },
+        {
+          "card": "Mulcharmy Meowls",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a0b348e5e29e953ce359bea",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Maxx \"C\"",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b31c95e29e953ce3594f9",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dimension Shifter",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0b308c764649347a901f6b",
+      "family": "Branded",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a0a93c3591cc945f30ce899",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Contact \"C\"",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a0a52842ee34fe551c94862",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dimension Shifter",
+          "impact": "High"
+        },
+        {
+          "card": "Retaliating \"C\"",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0a21a33b451fa241010812",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Droll & Lock Bird",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a0a1aa343895231e52f44bd",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Mulcharmy Fuwalos",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a0a16a952677a734da9deb0",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "6a0a168a340cdb99e82c0723",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "Low"
+        }
+      ]
+    },
+    {
+      "id": "6a0a16738232a0c137337574",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "6a0a15f5eb6dc555af1903e8",
+      "family": "Yummy",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Dimension Shifter",
+          "impact": "High"
+        }
+      ]
+    },
+    {
+      "id": "69c19486392e798f82e86423",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Infinite Impermanence",
+          "impact": "Medium"
+        },
+        {
+          "card": "Effect Veiler",
+          "impact": "Medium"
+        },
+        {
+          "card": "Ghost Mourner & Moonlit Chill",
+          "impact": "Medium"
+        }
+      ]
+    },
+    {
+      "id": "69c19449392e798f82e862af",
+      "family": "Dracotail",
+      "archived": false,
+      "counter": [
+        {
+          "card": "Ash Blossom & Joyous Spring",
+          "impact": "High"
+        }
+      ]
+    }
+  ]
+}

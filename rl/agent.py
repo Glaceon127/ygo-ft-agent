@@ -5,6 +5,7 @@ from functools import partial
 import numpy as np
 import jax
 import jax.numpy as jnp
+import os
 import flax.linen as nn
 
 from ygoai.rl.jax.transformer import EncoderLayer, PositionalEncoding, LlamaEncoderLayer
@@ -205,6 +206,75 @@ class GlobalEncoder(nn.Module):
         return x
 
 
+class ChainEncoder(nn.Module):
+    """连锁内容编码：输入 (B, 8, 13) 的 obs:chain_，输出 (B, channels)。
+
+    末尾 Dense 零初始化 → 初始化时输出恒为 0，向旧 checkpoint 热启动时前向完全等价。
+    """
+    channels: int = 128
+    dtype: Optional[jnp.dtype] = None
+    param_dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, x, id_feat):
+        c = self.channels
+        embed = partial(
+            nn.Embed, dtype=self.dtype, param_dtype=self.param_dtype,
+            embedding_init=default_embed_init)
+        layer_norm = partial(nn.LayerNorm, use_scale=True, use_bias=True, dtype=self.dtype)
+        mlp = partial(MLP, dtype=self.dtype, param_dtype=self.param_dtype)
+
+        def _emb_clip(n, w, v):
+            # 越界索引（远端卡号 / 非标准 loc / seq 超范围）直接夹到合法区间，
+            # 否则 jnp 的 gather 会返回 NaN 并顺着 0*kernel 传进 f_chain。
+            return embed(n, w)(jnp.clip(v.astype(jnp.int32), 0, n - 1))
+
+        x_id = nn.Dense(
+            c, use_bias=False, dtype=self.dtype, param_dtype=self.param_dtype,
+            kernel_init=default_fc_init2)(id_feat)
+        x_link = _emb_clip(16, c // 8, x[:, :, 0])
+        x_ctrl = _emb_clip(2, c // 8, x[:, :, 1])
+        x_cat = [_emb_clip(256, c // 16, x[:, :, 4 + i]) for i in range(4)]
+        x_neg = _emb_clip(2, c // 16, x[:, :, 8])
+        x_loc = _emb_clip(9, c // 8, x[:, :, 9])
+        x_seq = _emb_clip(76, c // 8, x[:, :, 10])
+        x_eff = [_emb_clip(256, c // 16, x[:, :, 11 + i]) for i in range(2)]
+
+        h = jnp.concatenate(
+            [x_id, x_link, x_ctrl] + x_cat + [x_neg, x_loc, x_seq] + x_eff, axis=-1)
+        h = layer_norm()(h)
+        h = jax.nn.swish(mlp((c,), kernel_init=default_fc_init2)(h))
+        h = nn.Dense(
+            c, use_bias=False, dtype=self.dtype, param_dtype=self.param_dtype,
+            kernel_init=nn.initializers.zeros)(h)
+        valid = (x[:, :, 0] > 0).astype(h.dtype)
+        vsum = jnp.maximum(valid.sum(axis=1, keepdims=True), 1.0)
+        return (h * valid[..., None]).sum(axis=1) / vsum
+
+
+class ChainEffectEncoder(nn.Module):
+    channels: int
+    dtype: Optional[jnp.dtype] = None
+    param_dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, slots, chain, card_embeddings):
+        known = (slots > 0) & (slots <= 14) & (chain[..., 0] > 0)
+        effect = nn.Embed(
+            15, 16, dtype=self.dtype, param_dtype=self.param_dtype, name="effect",
+        )(jnp.clip(slots.astype(jnp.int32), 0, 14))
+        inputs = jnp.concatenate((card_embeddings, effect), axis=-1)
+        hidden = nn.silu(nn.Dense(
+            64, dtype=self.dtype, param_dtype=self.param_dtype, name="hidden",
+        )(inputs))
+        pooled = jnp.where(known[..., None], hidden, 0).sum(axis=1)
+        pooled = pooled / jnp.maximum(known.sum(axis=1, keepdims=True), 1)
+        return nn.Dense(
+            self.channels, use_bias=False, dtype=self.dtype, param_dtype=self.param_dtype,
+            kernel_init=nn.initializers.zeros, name="out",
+        )(pooled)
+
+
 class Encoder(nn.Module):
     channels: int = 128
     out_channels: Optional[int] = None
@@ -219,6 +289,7 @@ class Encoder(nn.Module):
     action_feats: bool = True
     oppo_info: bool = False
     version: int = 2
+    chain_effect_features: bool = False
 
     @nn.compact
     def __call__(self, x):
@@ -397,6 +468,22 @@ class Encoder(nn.Module):
             f_state = MLP((c * 2, oc), dtype=self.dtype, param_dtype=self.param_dtype)(f_state)
         f_state = layer_norm()(f_state)
 
+        # ---- 连锁内容注入（末尾零初始化，热启动旧权重时前向等价）----
+        x_chain = x.get('chain_', None)
+        if x_chain is not None and oc == c and not os.environ.get('YGO_NO_CHAIN'):
+            x_chain = x_chain.astype(jnp.int32)
+            x_chain_id = id_embed(jnp.clip(
+                decode_id(x_chain[:, :, 2:4]), 0, id_embed.num_embeddings - 1))
+            f_chain = ChainEncoder(
+                channels=c, dtype=self.dtype, param_dtype=self.param_dtype)(
+                    x_chain, x_chain_id)
+            f_state = f_state + f_chain
+            if self.chain_effect_features:
+                f_state = f_state + ChainEffectEncoder(
+                    channels=c, dtype=self.dtype, param_dtype=self.param_dtype,
+                    name="chain_effect_encoder",
+                )(x["chain_effect_"], x_chain, x_chain_id)
+
         return f_actions, f_state, f_g_g_card, a_mask, valid
 
 
@@ -427,7 +514,7 @@ class FiLMActor(nn.Module):
     final_init: nn.initializers.Initializer = nn.initializers.orthogonal(0.01)
 
     @nn.compact
-    def __call__(self, f_state, f_actions, mask):
+    def __call__(self, f_state, f_actions, mask, defense_mask=None):
         f_state = f_state.astype(self.dtype)
         f_actions = f_actions.astype(self.dtype)
         c = self.channels
@@ -441,9 +528,62 @@ class FiLMActor(nn.Module):
 
         logits = nn.Dense(1, dtype=jnp.float32, param_dtype=self.param_dtype,
                           kernel_init=self.final_init)(f_actions)[:, :, 0]
+        if defense_mask is not None:
+            delta = self.param("cross_deck_defense", nn.initializers.zeros, (f_actions.shape[-1],))
+            adjustment = 6 * jnp.tanh((f_actions @ delta) / 6)
+            logits = logits + jnp.where(defense_mask, adjustment, 0)
         big_neg = jnp.finfo(logits.dtype).min
         logits = jnp.where(mask, big_neg, logits)
         return logits
+
+
+class ChainResponseResidual(nn.Module):
+    """Score legal responses to an opponent's current, identifiable effect."""
+
+    num_embeddings: int
+    param_dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, chain, slots, menu, action_features, state_features, action_mask):
+        chain_positions = jnp.arange(chain.shape[1])
+        top_index = jnp.maximum(jnp.where(chain[..., 0] > 0, chain_positions, -1).max(axis=1), 0)
+        rows = jnp.arange(chain.shape[0])
+        top = chain[rows, top_index]
+        slot = slots[rows, top_index].astype(jnp.int32)
+        card_id = decode_id(top[..., 2:4].astype(jnp.int32))
+        known = ((top[..., 0] > 0) & (top[..., 1] == 1) & (slot > 0) & (slot <= 14)
+                 & (card_id > 0) & (card_id < self.num_embeddings))
+
+        chain_action = (menu[..., 3] == 2) & ~action_mask
+        activate = chain_action & (menu[..., 4] == 8)
+        decline = chain_action & (menu[..., 4] == 9)
+        optional = known & activate.any(axis=1) & decline.any(axis=1)
+
+        card_features = nn.Embed(self.num_embeddings, 16, param_dtype=self.param_dtype, name="source_card")(
+            jnp.clip(card_id, 0, self.num_embeddings - 1))
+        slot_features = jax.nn.one_hot(slot, 15, dtype=card_features.dtype)
+        effect = nn.Dense(32, param_dtype=self.param_dtype, name="effect")(
+            jnp.concatenate((card_features, slot_features), axis=-1))
+        action = nn.Dense(32, param_dtype=self.param_dtype, name="action")(
+            jnp.concatenate((action_features, activate[..., None], decline[..., None]), axis=-1))
+        state = nn.Dense(32, use_bias=False, param_dtype=self.param_dtype, name="state")(state_features)
+        hidden = nn.silu(action + (effect + state)[:, None, :])
+        scores = nn.Dense(1, use_bias=False, param_dtype=self.param_dtype,
+                          kernel_init=nn.initializers.zeros, name="out")(hidden)[..., 0]
+        return jnp.where(optional[:, None] & (activate | decline), scores, 0)
+
+
+class BattleResidual(nn.Module):
+    param_dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, features):
+        hidden = nn.silu(nn.Dense(32, param_dtype=self.param_dtype, name="hidden")(features))
+        scores = nn.Dense(
+            1, use_bias=False, param_dtype=self.param_dtype,
+            kernel_init=nn.initializers.zeros, name="out",
+        )(hidden)[..., 0]
+        return scores * features[..., 0]
 
 
 class Critic(nn.Module):
@@ -563,6 +703,18 @@ class EncoderArgs:
 
 @dataclass
 class ModelArgs(EncoderArgs):
+    own_turn_ash_g: bool = False
+    cross_deck_defense: bool = False
+
+    def ash_g_ids(self, code_list_file):
+        if not (self.own_turn_ash_g or self.cross_deck_defense):
+            return None
+        with open(code_list_file) as f:
+            codes = [int(line.split()[0]) for line in f if line.strip()]
+        return codes.index(14558127) + 1, codes.index(23434538) + 1
+
+    battle_features: bool = False
+    """enable candidate-level battle scoring"""
     rnn_channels: int = 512
     """the number of channels for the RNN in the agent"""
     rnn_type: Optional[Literal['lstm', 'gru', 'rwkv', 'none']] = "lstm"
@@ -581,9 +733,21 @@ class ModelArgs(EncoderArgs):
     """the depth of the critic"""
     rwkv_head_size: int = 32
     """the head size for the RWKV"""
+    chain_effect_features: bool = False
+    """use the effect number of each active chain link"""
+    chain_response_features: bool = False
+    """use candidate-level scoring for optional responses to identified chain effects"""
+
+    @property
+    def uses_chain_effect_slots(self) -> bool:
+        return self.chain_effect_features or self.chain_response_features
 
 
 class RNNAgent(nn.Module):
+    own_turn_ash_g: bool = False
+    cross_deck_defense: bool = False
+    ash_g_ids: Optional[Tuple[int, int]] = None
+    battle_features: bool = False
     num_layers: int = 2
     num_channels: int = 128
     rnn_channels: int = 512
@@ -609,6 +773,9 @@ class RNNAgent(nn.Module):
     dtype: jnp.dtype = jnp.float32
     param_dtype: jnp.dtype = jnp.float32
 
+    chain_effect_features: bool = False
+    chain_response_features: bool = False
+
     @nn.compact
     def __call__(self, x, rstate, done=None, switch_or_main=None, train=False):
         batch_size = jax.tree.leaves(rstate)[0].shape[0]
@@ -618,6 +785,7 @@ class RNNAgent(nn.Module):
         encoder = Encoder(
             channels=c,
             out_channels=oc,
+            chain_effect_features=self.chain_effect_features,
             num_layers=self.num_layers,
             embedding_shape=self.embedding_shape,
             dtype=self.dtype,
@@ -679,7 +847,46 @@ class RNNAgent(nn.Module):
         else:
             actor = Actor(
                 channels=c, dtype=jnp.float32, param_dtype=self.param_dtype, final_init=actor_init)
-        logits = actor(f_state_r, f_actions, mask)
+        if self.cross_deck_defense:
+            if not self.film:
+                raise ValueError("Cross-deck defense requires FiLMActor")
+            ash_id, maxx_id = self.ash_g_ids
+            chain, menu = x["chain_"], x["actions_"]
+            active = chain[..., 0] != 0
+            last = jnp.max(jnp.where(active, jnp.arange(chain.shape[1]), -1), axis=1)
+            top = chain[jnp.arange(chain.shape[0]), jnp.maximum(last, 0)]
+            opponent = (x["global_"][:, 7] == 0) & (last >= 0) & (top[:, 1] == 1)
+            ids = decode_id(menu[..., 1:3].astype(jnp.int32))
+            chain_menu = (~mask) & (menu[..., 3] == 2)
+            activate = chain_menu & (menu[..., 4] == 8)
+            ash = activate & (ids == ash_id)
+            decline = chain_menu & (menu[..., 4] == 9)
+            covered = ash | decline | (activate & (ids == maxx_id))
+            window = opponent & ash.any(axis=1) & decline.any(axis=1) & (covered | mask).all(axis=1)
+            logits = actor(f_state_r, f_actions, mask, covered & window[:, None])
+        else:
+            logits = actor(f_state_r, f_actions, mask)
+        if self.battle_features and 'battle_' in x:
+            scores = BattleResidual(param_dtype=self.param_dtype, name="battle_residual")(x['battle_'])
+            logits = logits + jnp.where(mask, 0, scores)
+        if self.chain_response_features and not os.environ.get("YGO_NO_CHAIN"):
+            n_embed = self.embedding_shape if self.embedding_shape is not None else 999
+            if isinstance(n_embed, tuple):
+                n_embed = n_embed[0]
+            logits = logits + ChainResponseResidual(
+                int(n_embed) + 1, param_dtype=self.param_dtype, name="chain_response_residual",
+            )(x["chain_"], x["chain_effect_"], x["actions_"], f_actions, f_state_r, mask)
+        if self.own_turn_ash_g:
+            ash_id, maxx_id = self.ash_g_ids
+            chain, menu = x["chain_"], x["actions_"]
+            active = chain[..., 0] != 0
+            last = jnp.max(jnp.where(active, jnp.arange(chain.shape[1]), -1), axis=1)
+            link = chain[jnp.arange(chain.shape[0]), jnp.maximum(last, 0)]
+            top_g = (last >= 0) & (link[:, 1] == 1) & (decode_id(link[:, 2:4].astype(jnp.int32)) == maxx_id)
+            own_turn = x["global_"][:, 7] != 0
+            ash = (menu[..., 3] == 2) & (menu[..., 4] == 8) & (decode_id(menu[..., 1:3].astype(jnp.int32)) == ash_id)
+            bias = self.param("own_turn_ash_g_bias", nn.initializers.zeros, ())
+            logits = logits + jnp.where((own_turn & top_g)[:, None] & ash & ~mask, bias, 0)
         if self.q_head:
             return rstate, logits, valid
 
