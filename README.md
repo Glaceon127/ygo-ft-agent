@@ -11,8 +11,8 @@
 | 部分 | 原作者备份 | 本分支的改进 |
 |---|---|---|
 | 局面与合法动作 | 卡牌、全局、动作、历史动作每行分别为 41、23、12、14 列 | 扩展为 **73、33、14、16 列**。卡牌和动作增加效果语义、目标关系等信息，显式跟踪公开手牌、连锁中的发动者和已无效状态。[环境编码](env/ygopro.h) · [公开手牌](env/public_hand.h) |
-| 连锁与战斗决策 | 策略从局面与历史编码选择引擎给出的动作 | 增加 **8 × 13** 连锁表、公开效果槽和每个候选动作的 **24 项**战斗特征。区分同一张卡的不同效果，攻击决策可直接使用公开攻守差、表示形式及候选目标信息。[策略网络](rl/agent.py) · [战斗特征](env/battle_features.h) |
-| 妖精传姬展开 | 通用对局回报及自对弈训练 | 用引擎事件记录讲述者、编写者等终端登场，追踪威凯特转化、故事尾巴堆墓和后续连锁。训练可分别调节这些奖励，并对自攻、错误使用手坑等动作计数。评估区分终端登场、临时怪兽和终端留场。[奖励](rl/shaping.py) · [评估](rl/battle.py) |
+| 连锁与战斗决策 | 策略从局面与历史编码选择引擎给出的动作 | 增加 **8 × 13** 连锁表、公开效果槽和每个候选动作的 **24 项**战斗特征。当公开描述能映射到效果槽时，可区分同卡的不同发动效果。攻击决策可直接使用公开攻守差、表示形式及候选目标信息。[策略网络](rl/agent.py) · [战斗特征](env/battle_features.h) |
+| 妖精传姬展开 | 通用对局回报及自对弈训练 | 从观测统计讲述者、编写者等终端，并用引擎事件追踪威凯特送墓后终端登场、故事尾巴堆墓后同回合进入魔陷区。训练可分别调节这些奖励，并对自损攻击、错误使用手坑等动作计数。评估区分终端登场、临时怪兽和终端留场。[奖励](rl/shaping.py) · [评估](rl/battle.py) |
 | 跨卡组打断 | 上游支持不同牌表与模型互战 | 新增可复现的攻略窗口、锁鸟检索后窗口、场上无效的发动与目标约束。在混合对局中对攻略认可的合法应答加入辅助损失，保留整局 PPO 更新。[攻略映射](rl/_popular8_counter.py) · [目标筛选](rl/_field_negation_rule.py) · [联合训练](rl/train_counters.py) |
 | G 系手坑 | 对局引擎处理卡片效果与抽牌 | 根据引擎的抽牌原因追踪增殖的 G、山雀、水母和猫。当己方在自己回合让对方因这些效果实际抽牌，每张扣 **0.01**。终端和胜负回报继续参与权衡，未送抽的特殊召唤没有此项扣分。[抽牌归因](env/ygopro.cpp) · [奖励计算](rl/train_counters.py) |
 | 客户端对局与核验 | ygoinf 已支持通过 HTTP 预测动作 | 补齐 srvpro2 协议消息到训练观测的映射，包括连锁发动地点、目标、战斗候选和多选菜单。模型玩家插件将预测转换回合法响应，记录重试、空预测、兜底和终局原因，支持导出 YRP 回放。[推理编码](infer/native_features.py) · [模型玩家插件](infer/index.ts) |
@@ -23,13 +23,13 @@
 
 仓库内的打断规则覆盖 **Blitzclique、Rikka、Dracotail、Yummy、Witchcrafter、Invoked、Dark Magician、Branded** 八个系列，另保留相剑回归窗口。八系列打断条目来自 Master Duel Meta 攻略。每条可用规则关联系列、效果来源、发动地点或效果槽，再在引擎给出的合法应答里匹配。锁鸟使用检索结算后的窗口。泡影、效遮等效果还要核对目标是否仍是场上可选的发动者。[攻略来源](https://www.masterduelmeta.com/combos-and-counters#counters) · [规则来源索引](assets/counter/popular8_sources.json) · [原生引擎复现记录](assets/counter/popular8_extended_windows.json)
 
-学习方始终操作妖精传姬，轮换先后手。训练池混合本家镜像、四种 G、相剑及八系列对手。对手使用冻结的起点策略，部分对局引导它打出指定起动卡或 G，以便出现可以学习的决策。指南标签用于训练，模型可以在多个攻略允许的应答之间分配概率。整局应对能力另用专用 WindBot 检验。[训练牌表](assets/joint_decks) · [训练池与损失函数](rl/train_counters.py)
+学习方始终操作妖精传姬，分别在 P0 和 P1 的并行环境中采样。训练池混合本家镜像、四种 G、相剑及八系列对手。对手使用冻结的起点策略，部分对局引导它打出指定起动卡或 G，以便出现可以学习的决策。指南标签用于训练，模型可以在多个攻略允许的应答之间分配概率。整局应对能力另用专用 WindBot 检验。[训练牌表](assets/joint_decks) · [训练池与损失函数](rl/train_counters.py)
 
 ## 怎样评估模型
 
 - **打断窗口**：在同一批合法局面和新起手中，统计模型首选动作命中攻略应答的比例。相剑回归还会让连锁结算，核对目标效果是否实际被阻止。
 - **G 系应对**：对照相同起手下对方的实际抽牌数、己方终端留场和最终胜负，观察模型在减少送抽与维持场面之间的取舍。
-- **完整对局**：本家模型互战时使用相同种子并交换座位。与专用 WindBot 对战时分别统计先后手胜率，并从日志、回放核对终局原因、推理失败和兜底次数。
+- **完整对局**：做配对比较时，分别记录种子和模型座位。普通评估入口会分配或切换座位；需要相同发牌的对照时，应分别固定座位运行并核对起手。与专用 WindBot 对战时分别统计先后手胜率，并从日志、回放核对终局原因、推理失败和兜底次数。
 
 ## 使用本项目
 
@@ -54,17 +54,29 @@ export FT_LUA_DIR=/path/to/lua-prefix  # 含 include/lua/ 和 lib/
 xmake f -y -F fairy.xmake.lua
 xmake build -F fairy.xmake.lua ygopro_ygoenv
 cd scripts
-python -c "import ygoenv; s=ygoenv.make_spec('YGOPro-v1'); assert {'obs:battle_', 'info:g_draws', 'info:droll_event', 'info:negation_preview'} <= set(s._state_keys)"
+python - <<'PY'
+import ygoenv
+from ygoenv.ygopro import ygopro_ygoenv
+
+print(ygopro_ygoenv.__file__)
+required = {"obs:battle_", "info:g_draws", "info:droll_event",
+            "info:negation_preview", "info:chain_effect_slots", "info:opening_ecclesia"}
+missing = required.difference(ygoenv.make_spec("YGOPro-v1")._state_keys)
+if missing:
+    raise SystemExit(f"当前引擎缺少联合训练字段：{sorted(missing)}")
+PY
 ```
 
-**启动推理服务。** 将 `CHECKPOINT` 设为兼容联合策略网络的模型文件绝对路径。专用入口会加载连锁、战斗及打断策略所需的参数。[推理入口](rl/serve_counters.py)
+自检如果报缺少字段，请核对打印的扩展路径、当前 Python 和 `PYTHONPATH`。已安装的旧版也能创建 `YGOPro-v1`；联合训练须加载本分支构建的扩展。
+
+**启动推理服务。** 将 `CHECKPOINT` 设为兼容联合策略网络的模型文件绝对路径。随仓库提供的示例和校验值见[权重说明](weights/README.md)。专用入口会加载连锁、战斗及打断策略所需的参数。[推理入口](rl/serve_counters.py)
 
 ```bash
 cd "$UP/scripts"
 JAX_PLATFORMS=cuda python serve_counters.py "${CHECKPOINT:?请设置模型文件的绝对路径}" --port 3000
 ```
 
-外部对局还需要配套的 srvpro2 和 WindBot。在 srvpro2 源码的 `plugins/model-player/` 放入本仓库 `infer/` 中的 TypeScript 文件及 `effect_tags.json`，重新构建插件，并设置 `MODEL_PLAYER_TAKEOVER=1`、`MODEL_PLAYER_NAME=model`、`MODEL_PLAYER_URL=http://127.0.0.1:3000`。由插件接管名为 `model` 的客户端。Yummy 对手使用 WindBot 参数 `Deck=Neko`，对应的牌表文件是 `AI_Neko.ydk`。[插件入口](infer/index.ts)
+外部对局还需要配套的 srvpro2 和 WindBot。在 srvpro2 源码的 `plugins/model-player/` 放入本仓库 `infer/` 中的 TypeScript 文件及 `effect_tags.json`，重新构建插件，并设置 `MODEL_PLAYER_TAKEOVER=1`、`MODEL_PLAYER_NAME=model`、`MODEL_PLAYER_URL=http://127.0.0.1:3000`。由插件接管名为 `model` 的客户端。构建产物的插件目录需包含 `effect_tags.json`。如需导出回放，启动 srvpro2 时再设置 `MODEL_PLAYER_YRP=1`，可用 `MODEL_PLAYER_YRP_DIR` 指定输出目录。Yummy 对手使用 WindBot 参数 `Deck=Neko`，对应的牌表文件是 `AI_Neko.ydk`。[插件入口](infer/index.ts)
 
 **继续训练。** 将 `START_STEP` 设为起点模型对应的全局步数，将 `TRAIN_STEPS` 设为本次计划增加的环境步数。启动器会重新初始化优化器，在终端实时输出日志，并将 TensorBoard 事件、窗口统计及检查点保存到本次运行目录。[训练启动器](scripts/launch/train_joint.sh)
 

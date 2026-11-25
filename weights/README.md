@@ -1,119 +1,36 @@
-# 权重
+# 示例权重
 
-当前工作副本的 `u1172.flax_model` 是完成八系列打断与 G 送抽联合续训后的参数文件。Git 忽略此目录下的模型二进制；迁移到另一台机器时单独复制该文件，并核对 SHA-256。
+仓库随附 [u1172.flax_model](u1172.flax_model)。它是八系列打断与 G 送抽联合续训后的参数文件，已由 Git 跟踪，普通克隆即可取得。[评估与权重记录](../docs/u1172-evaluation.json)
 
-| 文件 | 字节 | SHA-256 |
-|---|---:|---|
-| `u1172.flax_model` | 77,142,196 | `ae99ee79b3519c9ffcd22f73776f237f3de59102f19cfe402bcd5fea063b32e6` |
+| 字节数 | SHA-256 | 对应的全局环境步数 |
+|---:|---|---:|
+| 77,142,196 | `ae99ee79b3519c9ffcd22f73776f237f3de59102f19cfe402bcd5fea063b32e6` | 78,292,352 |
 
-u1172 的推理入口是 `serve_counters.py`，续训入口是 `train_joint.sh`，起始全局步数为 **78,292,352**。[最新权重的完整命令](../README.md#使用本项目)
+## 校验与使用
 
-以下命令保留给早期使用普通策略网络的权重。
-
-## 训练（续训）
+在覆盖文件仓库根目录运行以下 Bash 命令。保留这些变量，在同一终端按主 README 准备工作副本后，即可使用其中的推理或续训命令。覆盖脚本会安装策略入口，示例权重直接从本仓库读取。[工作副本准备及启动命令](../README.md#使用本项目)
 
 ```bash
-python cleanba.py \
-  --checkpoint weights/xxx.flax_model \
-  --ckpt-dir checkpoints_xxx \
-  --deck assets/FairyTail.ydk \
-  --num-embeddings 15049 \
-  --total-timesteps 3000000 \
-  --tb-offset <上一轮终点的 global_step> \
-  --learning-rate 0.0002 --seed 1 \
-  ...
+FT="$(pwd)"
+CHECKPOINT="$FT/weights/u1172.flax_model"
+START_STEP=78292352
+sha256sum "$CHECKPOINT"
 ```
 
-`--tb-offset` 填上一轮的终点，续训后 TensorBoard 的横轴才是连续的全局步数。
+推理使用 `serve_counters.py`，它启用联合策略及匹配的观测和动作筛选。服务启动后，访问 `http://127.0.0.1:3000/` 应返回 `OK`。续训使用 `train_joint.sh`，将 `START_STEP` 作为日志偏移，并设置本次预算 `TRAIN_STEPS`。[推理入口](../rl/serve_counters.py) · [训练入口](../scripts/launch/train_joint.sh)
 
-## 推理
+## 早期普通策略的评估
+
+以下示例适用于采用 `battle.py` 默认策略结构、embedding 配置为 15,049 的旧权重。将 `CKPT_A` 和 `CKPT_B` 设为两个模型的绝对路径。两个模型使用同一牌表时，`--deck` 可直接传文件。
 
 ```bash
-# cwd 必须是 scripts/ —— features.py 用相对路径读 code_list.txt
-cd scripts
-
-CHECKPOINT=../weights/xxx.flax_model \
-JAX_PLATFORMS=cuda \
-  python -m uvicorn ygoinf.server:app --host 127.0.0.1 --port 3000
+cd "$UP/scripts"
+python battle.py --checkpoint1 "${CKPT_A:?请设置模型 A 的绝对路径}" \
+  --checkpoint2 "${CKPT_B:?请设置模型 B 的绝对路径}" \
+  --num-embeddings 15049 --deck ../assets/joint_decks/FAIRY_TAIL_Magistus2.ydk \
+  --num-episodes 32 --num-envs 32
 ```
 
-启动后可访问 `http://127.0.0.1:3000/docs` 确认服务就绪。
+使用不同卡组时，将 `--deck` 改为牌表目录，并传 `--deck1` 和 `--deck2` 指定 P0、P1 的牌表名（不含扩展名）。`--agent1-player 0` 将模型 A 固定在 P0，使用第一副牌表；取 1 则固定在 P1，使用第二副。默认值 −1 允许换座。目录中的所有牌表都会在初始化时读入。[评估实现](../rl/battle.py) · [牌表读入](../docs/deck-constraints.md)
 
-## 评估
-
-### 同一个卡组
-
-```bash
-python battle.py \
-  --checkpoint1 weights/a.flax_model \
-  --checkpoint2 weights/b.flax_model \
-  --deck assets/FAIRY_TAIL_Magistus2.ydk \
-  --num-episodes 1024 --num-envs 32
-```
-
-### 两个不同卡组
-
-**关键两点**：
-
-1. `--deck` 指向**目录**，`--deck1` / `--deck2` 传**卡组名（不含 `.ydk`）**，不是路径
-2. 目录用 **`assets/deck_md`**（训练/评估共用，文件稳定）
-
-```bash
-python battle.py \
-  --deck        assets/deck_md \
-  --deck1       FAIRY_TAIL_Magistus2 \
-  --deck2       FairyTail \
-  --checkpoint1 weights/a.flax_model \
-  --checkpoint2 weights/b.flax_model \
-  --agent1-player 0 \
-  --num-episodes 1024 --num-envs 32
-```
-
-`battle.py` 的参数注释写的是 “the **deck name** for the first player”，传完整路径会让 C++ 层抛 `std::bad_function_call`。
-
-加载机制（`ygoai/utils.py:30-36`）：
-
-```python
-if deck_fp.is_dir():
-    decks = {f.stem: str(f) for f in deck_fp.glob("*.ydk")}   # 目录下全部卡组注册进 C++
-    deck_name = 'random'                                       # 不指定时每局随机抽
-else:
-    decks = {deck_name: deck}
-```
-
-**因此目录里每一份 `.ydk` 都必须可加载** —— 有一份坏的（如 CRLF 行尾导致主卡组 0 张）会让整个评估在初始化时就抛异常。所以 `deck_md` 里已移除 `elfnote_2nd_raw.ydk`。
-
-> **不要用 `assets/deck_eval`**：该目录是后来新建的，实测其中 `.ydk` 会被清成 0 字节，导致 `RuntimeError: Main deck must contain at least 40 cards, found: 0`。原因未定位，用 `deck_md` 可完全规避。
-
-**更省事的方式**：用 `scripts/eval/eval_dual.sh`，它会校验卡组并自动用 `deck_md`：
-
-```bash
-bash scripts/eval/eval_dual.sh \
-  <ckpt1> FAIRY_TAIL_Magistus2 \
-  <ckpt2> FairyTail 1024 1
-```
-
-### `--agent1-player` 与 `nan`
-
-| 取值 | 行为 |
-|---|---|
-| 不传（默认 `-1`） | 每局翻转座位，`--deck1/--deck2` 会跟着换人 |
-| `0` / `1` | 固定座位，`--deck1` 恒定由 agent1 使用 |
-
-**固定座位时 Payoff 矩阵有一半是 `nan`**，因为另一侧没有对局数据（`0/0`），属正常现象，不影响整体 `win_rate`。
-
-### 训练期评估的局数
-
-`--local-eval-episodes N` 是**每个 actor 线程**的局数，实际总局数 = `N × num_actor_threads`。
-
-```
---local-eval-episodes 8 --num-actor-threads 8  →  64 局
-```
-
-所以训练日志里的 `eval_win_rate` 是 `k/64`，不是 `k/8`。
-
-## 校验
-
-```bash
-sha256sum xxx.flax_model
-```
+训练日志里的 `eval_win_rate` 还取决于实际启动配置。仓库的联合启动器使用一个 actor 线程和 `--local-eval-episodes 8`，每次训练期评估为 8 局。固定窗口、模型互战和 WindBot 实战的样本另见随权重保存的评估记录。[联合启动器](../scripts/launch/train_joint.sh) · [评估记录](../docs/u1172-evaluation.json)
