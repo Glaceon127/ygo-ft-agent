@@ -1236,6 +1236,7 @@ class Card {
 
 protected:
   CardCode code_ = 0;
+  bool public_prince_name_ = false;
   uint32_t alias_;
   uint64_t setcode_;
   uint32_t type_;
@@ -1288,6 +1289,7 @@ public:
   }
 
   const std::string &name() const { return name_; }
+  CardCode observation_code() const { return public_prince_name_ ? 19144623u : code_; }
   const std::string &desc() const { return desc_; }
   const uint32_t &type() const { return type_; }
   const uint32_t &level() const { return level_; }
@@ -1814,6 +1816,8 @@ public:
         "info:opening_ecclesia"_.Bind(Spec<int>({}, {0,1})),
         "info:droll_event"_.Bind(Spec<int>({conf["max_options"_], 3})),
         "info:chain_effect_slots"_.Bind(Spec<uint8_t>({8}, {0, 14})),
+        "info:negation_zones"_.Bind(Spec<uint8_t>({conf["max_options"_]})),
+        "info:negation_context"_.Bind(Spec<uint8_t>({27}, {0, 255})),
         "info:chain_target_context"_.Bind(Spec<uint8_t>({4})),
         "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})),
         "info:to_play"_.Bind(Spec<int>({}, {0, 1})),
@@ -2068,6 +2072,14 @@ protected:
     int id = 0;               // 单调递增的连锁 id
   };
   std::vector<ChainEntry> chain_stack_;
+  std::array<std::map<uint32_t,uint16_t>,2> observed_effects_;
+  std::array<uint8_t,2> spent_quick_names_{};
+  std::array<uint8_t,2> spent_quick_zones_{};
+  void clear_quick_zone(uint32_t loc) {
+    const unsigned seq = (loc >> 16) & 255;
+    if (((loc >> 8) & 255) == LOCATION_MZONE && seq < 7)
+      spent_quick_zones_[loc & 1] &= ~(1u << seq);
+  }
   bool update_negation_source(ChainEntry& entry, uint32_t from, uint32_t to) {
     if (entry.loc != LOCATION_MZONE ||
         (from & 0xffffffu) != (uint32_t(entry.controler) | (LOCATION_MZONE << 8) | (uint32_t(entry.seq) << 16)))
@@ -2082,6 +2094,7 @@ protected:
   uint32_t last_hint_value_ = 0;   // 最近一次 HINT_SELECTMSG 的 value
   bool chain_forced_ = false;     // 本次连锁里是否出现强制项
   uint8_t spe_count_ = 0;         // MSG_SELECT_CHAIN 头部的「还能响应数」
+  bool main_end_offer_ = false;
 
   const int n_history_actions_;
 
@@ -2506,8 +2519,11 @@ public:
     nz_pend_len_ = 0;
     for (int _i = 0; _i < 4; ++_i) { nz_win_by_len_[_i] = 0; nz_act_by_len_[_i] = 0; }
     chain_stack_.clear();
+    spent_quick_names_ = {}; spent_quick_zones_ = {};
+    for (auto& uses : observed_effects_) uses.clear();
     chain_forced_ = false;
     spe_count_ = 0;
+    main_end_offer_ = false;
     attack_target_pending_ = false;
     pending_attacker_atk_ = -1;
     pending_attacker_ctrl_ = -1;
@@ -3469,7 +3485,15 @@ public:
     int n_options = legal_actions_.size();
     state["info:opening_ecclesia"_] = int(opening_ecclesia_stage_==2);
     droll_event(state["info:droll_event"_]);
-    negation_preview(state["info:negation_preview"_]);
+    negation_preview(state["info:negation_preview"_], state["info:negation_zones"_]);
+    auto &neg_ctx = state["info:negation_context"_];
+    neg_ctx(0) = spent_quick_names_[1-to_play_];
+    neg_ctx(1) = spent_quick_zones_[1-to_play_];
+    neg_ctx(2) = msg_ == MSG_SELECT_CARD && last_hint_value_ == 573;
+    neg_ctx(3) = opponent_spell_counters();
+    public_effect_uses(neg_ctx);
+    public_negation_targets(neg_ctx);
+    neg_ctx(26) = msg_ == MSG_SELECT_CHAIN && main_end_offer_;
     auto &effect_slots = state["info:chain_effect_slots"_];
     for (int i = 0; i < 8; ++i) effect_slots(i) = 0;
     if (spec_.config["chain_effect_probe"_] && n_options > 0) {
@@ -3680,6 +3704,7 @@ public:
     n_options = legal_actions_.size();
     state["info:num_options"_] = n_options;
 
+    const CardId prince_id = c_get_card_id(19144623u);
     for (int i = 0; i < n_options; ++i) {
       auto &action = legal_actions_[i];
       action.msg_ = msg_;
@@ -3693,7 +3718,8 @@ public:
         } else {
           const auto& spec_info = find_spec_info(spec_infos, spec);
           action.spec_index_ = spec_info.index;
-          if (action.cid_ == 0) action.cid_ = spec_info.cid;
+          if (action.cid_ == 0 || (loc == LOCATION_MZONE && prince_id != 0 && spec_info.cid == prince_id))
+            action.cid_ = spec_info.cid;
         }
       }
     }
@@ -3824,7 +3850,7 @@ private:
             }
             CardId card_id = 0;
             if (!hide) {
-              card_id = c_get_card_id(c.code_);
+              card_id = c_get_card_id(c.observation_code());
             }
             _set_obs_card_(f_cards, offset, c, hide, card_id);
             offset++;
@@ -3863,7 +3889,7 @@ private:
         int n_cards = cards.size();
         for (int i = 0; i < n_cards; ++i) {
           const auto &c = cards[i];
-          CardId card_id = c_get_card_id(c.code_);
+          CardId card_id = c_get_card_id(c.observation_code());
           _set_obs_card_(f_cards, offset, c, false, card_id, false);
           offset++;
           if (offset == (spec_.config["max_cards"_] * 2 - 1)) {
@@ -3920,7 +3946,7 @@ private:
             }
             CardId card_id = 0;
             if (!hide) {
-              card_id = c_get_card_id(c.code_);
+              card_id = c_get_card_id(c.observation_code());
             }
             _set_obs_mask_(mask, offset, c, hide);
             offset++;
@@ -3946,16 +3972,8 @@ private:
     }
 
     if (!hide) {
-      CardId cid_out = card_id;
-      int rcc = static_cast<int>(c.controler_);
-      int rll = static_cast<int>(location & 0x7f);
-      int rss = static_cast<int>(c.sequence_);
-      if (rcc >= 0 && rcc < 2 && rll < 16 && rss < 16 &&
-          renamed_[rcc][rll][rss] != 0) {
-        cid_out = renamed_[rcc][rll][rss];
-      }
-      f_cards(offset, 0) = static_cast<uint8_t>(cid_out >> 8);
-      f_cards(offset, 1) = static_cast<uint8_t>(cid_out & 0xff);
+      f_cards(offset, 0) = static_cast<uint8_t>(card_id >> 8);
+      f_cards(offset, 1) = static_cast<uint8_t>(card_id & 0xff);
     }
     f_cards(offset, 2) = location_to_id(location);
 
@@ -4163,7 +4181,10 @@ private:
   struct SearchAddition { int player, slot; uint32_t cause, shown; };
   std::vector<SearchAddition> search_additions_;
   uint32_t resolving_search_ = 0;
-  void negation_preview(TArray<uint8_t>& result);
+  uint8_t opponent_spell_counters() const;
+  void public_effect_uses(TArray<uint8_t>& result) const;
+  void public_negation_targets(TArray<uint8_t>& result) const;
+  void negation_preview(TArray<uint8_t>& result, TArray<uint8_t>& zones);
 
   void _set_chain_target_context(TArray<uint8_t> &context) {
     constexpr CardCode kKaguya = 86937530u;
@@ -4489,17 +4510,8 @@ private:
         filled_from_spec = true;
         if (std::getenv("YGO_OBSCHK")) ++obs_spec_fill_;
       }
-      bool renamed_hit = false;
-      if (!la.spec_.empty()) {
-        auto [mc, ml, ms2, mp] = spec_to_ls(to_play_, la.spec_);
-        if (mc >= 0 && mc < 2 && ml < 16 && ms2 < 16 &&
-            renamed_[mc][ml][ms2] != 0) {
-          la.cid_ = renamed_[mc][ml][ms2];
-          renamed_hit = true;
-        }
-      }
       _set_obs_action(feat, i, la);
-      if (std::getenv("YGO_OBSCHK") && !filled_from_spec && !renamed_hit &&
+      if (std::getenv("YGO_OBSCHK") && !filled_from_spec && la.cid_ != c_get_card_id(19144623u) &&
           !la.finish_ && !la.spec_.empty() && to_play_ == cur_win_player_) {
         auto itc2 = g_id_to_code.find(la.cid_);
         uint32_t c2 = (itc2 == g_id_to_code.end())
@@ -4888,6 +4900,12 @@ private:
             callback_(0);
             auto la = legal_actions_[0];
             la.msg_ = msg_;
+            // Forced choices skip WriteState. Resolve the name before recording history.
+            if (!la.spec_.empty() && std::isdigit(la.spec_.back())) {
+              auto [owner, loc, seq, pos] = spec_to_ls(to_play_, la.spec_);
+              if (loc == LOCATION_MZONE && get_card(owner, loc, seq).public_prince_name_)
+                la.cid_ = c_get_card_id(19144623u);
+            }
             if (la.cid_ == 0 && !la.spec_.empty()) {
               la.cid_ = spec_to_card_id(la.spec_, to_play_);
             }
@@ -4957,6 +4975,7 @@ private:
     int32_t flags = QUERY_CODE | QUERY_ATTACK | QUERY_DEFENSE | QUERY_POSITION |
                     QUERY_LEVEL | QUERY_RANK | QUERY_LSCALE | QUERY_RSCALE |
                     QUERY_LINK;
+    if (loc == LOCATION_MZONE) flags |= QUERY_ALIAS;
     int32_t bl = YGO_QueryCard(pduel_, player, loc, seq, flags, query_buf_);
     qdp_ = 0;
     if (bl <= 0) {
@@ -4976,6 +4995,10 @@ private:
     Card c = c_get_card(code);
     uint32_t position = q_read_u32();
     c.set_location(position);
+    if (f & QUERY_ALIAS) {
+      auto current_code = q_read_u32();
+      c.public_prince_name_ = (c.position_ & POS_FACEUP) && current_code == 19144623u;
+    }
     uint32_t level = q_read_u32();
     if ((level & 0xff) > 0) {
       c.level_ = level & 0xff;
@@ -5004,6 +5027,9 @@ private:
                     QUERY_ATTACK | QUERY_DEFENSE | QUERY_EQUIP_CARD |
                     QUERY_OVERLAY_CARD | QUERY_COUNTERS | QUERY_STATUS |
                     QUERY_LSCALE | QUERY_RSCALE | QUERY_LINK;
+    // In the mobile core QUERY_ALIAS returns get_code(), including resolved
+    // name changes even when a target was selected automatically.
+    if (loc == LOCATION_MZONE) flags |= QUERY_ALIAS;
     int32_t bl = YGO_QueryFieldCard(pduel_, player, loc, flags, query_buf_);
     qdp_ = 0;
     std::vector<Card> cards;
@@ -5029,6 +5055,10 @@ private:
       c.sequence_ = sequence;
       c.position_ = position;
 
+      if (f & QUERY_ALIAS) {
+        auto current_code = q_read_u32();
+        c.public_prince_name_ = (position & POS_FACEUP) && current_code == 19144623u;
+      }
       uint32_t level = q_read_u32();
       if ((level & 0xff) > 0) {
         c.level_ = level & 0xff;
@@ -5193,6 +5223,8 @@ private:
       const auto &op = players_[1 - player];
       op->notify(fmt::format("Opponent drew {} cards.", drawed));
     } else if (msg_ == MSG_NEW_TURN) {
+      spent_quick_names_ = {}; spent_quick_zones_ = {};
+      for (auto& uses : observed_effects_) uses.clear();
       opening_ecclesia_stage_=0; outside_draw_adds_ = {}; search_additions_.clear(); resolving_search_=0;
       battle_attack_source_ = 0;
       tp_ = int(read_u8());
@@ -5226,6 +5258,11 @@ private:
                 f_seq = (from >> 16) & 0xff;
         uint8_t t_ctrl = to & 0xff, t_loc = (to >> 8) & 0xff,
                 t_seq = (to >> 16) & 0xff;
+        bool used = f_loc == LOCATION_MZONE && f_seq < 7 && (spent_quick_zones_[f_ctrl] & (1u << f_seq));
+        clear_quick_zone(from);
+        clear_quick_zone(to);
+        if (used && t_loc == LOCATION_MZONE && t_seq < 7 && ((to >> 24) & POS_FACEUP))
+          spent_quick_zones_[t_ctrl] |= 1u << t_seq;
         auto public_zone = [](uint8_t loc, uint8_t pos) {
           return loc == LOCATION_GRAVE ||
                  ((loc == LOCATION_MZONE || loc == LOCATION_SZONE ||
@@ -5476,6 +5513,16 @@ private:
       uint32_t loc1 = read_u32();
       CardCode code2 = read_u32();
       uint32_t loc2 = read_u32();
+      auto spent_at = [&](uint32_t loc) {
+        return ((loc >> 8) & 255) == LOCATION_MZONE && ((loc >> 16) & 255) < 7 &&
+               (spent_quick_zones_[loc & 1] & (1u << ((loc >> 16) & 255)));
+      };
+      bool used1 = spent_at(loc1), used2 = spent_at(loc2);
+      clear_quick_zone(loc1); clear_quick_zone(loc2);
+      if (used1 && ((loc2 >> 8)&255)==LOCATION_MZONE && ((loc2>>16)&255)<7)
+        spent_quick_zones_[loc2&1] |= 1u << ((loc2>>16)&255);
+      if (used2 && ((loc1 >> 8)&255)==LOCATION_MZONE && ((loc1>>16)&255)<7)
+        spent_quick_zones_[loc1&1] |= 1u << ((loc1>>16)&255);
       for (auto& entry : chain_stack_)
         if (!update_negation_source(entry, loc1, loc2)) update_negation_source(entry, loc2, loc1);
       if (!verbose_) {
@@ -5604,6 +5651,11 @@ private:
         fmt::println("Unknown card hint type {} with value {}", type, value);
       }
     } else if (msg_ == MSG_POS_CHANGE) {
+      auto before_pos = dp_;
+      read_u32();
+      auto changed_loc = read_u32();
+      if (read_u8() & POS_FACEDOWN) clear_quick_zone(changed_loc);
+      dp_ = before_pos;
       if (!verbose_) {
         dp_ = dl_;
         return;
@@ -6137,6 +6189,15 @@ private:
       ce.code = code;
       ce.desc = desc;
       ce.loc = tl;
+      if (tc < 2 && (desc >> 4) == code && (desc & 15) < 14)
+        observed_effects_[tc][code] |= 1u << (desc & 15);
+      if (tl == LOCATION_MZONE && tc < 2) {
+        if (code == 55273560 && desc == code*16u) spent_quick_names_[tc] |= 1;
+        if (code == 26077387 && desc == code*16u) spent_quick_names_[tc] |= 2;
+        if ((code == 45819647 || code == 27552504) && desc == code*16u+1 &&
+            card.location_ == LOCATION_MZONE && card.sequence_ < 7)
+          spent_quick_zones_[tc] |= 1u << card.sequence_;
+      }
       ce.seq = tl == LOCATION_MZONE
           ? (card.location_ == LOCATION_MZONE && card.controler_ == tc ? card.sequence_ : 74)
           : ts;
@@ -7100,7 +7161,9 @@ private:
       auto size = read_u8();
       auto spe_count = read_u8();
       spe_count_ = spe_count;
-      dp_ += 8;  // hint_timing + other_timing
+      const auto own_timing = read_u32();
+      const auto other_timing = read_u32();
+      main_end_offer_ = ((own_timing | other_timing) & 0x4u) != 0;  // TIMING_MAIN_END
       // 新版把 forced 从头部移到每个连锁项里，位置信息打包成 uint32
 
       std::vector<CardCode> codes;
@@ -7914,8 +7977,12 @@ public:
     state["info:pair_tail_cand"_] = 0;
     state["info:pair_tail_pick"_] = 0;
     state["info:opening_ecclesia"_]=0;
+    for (int i=0;i<27;++i) state["info:negation_context"_](i)=0;
     for (int i=0; i<spec_.config["max_options"_]; ++i) for (int j=0;j<3;++j) state["info:droll_event"_](i,j)=0;
-    for (int i = 0; i < spec_.config["max_options"_]; ++i) state["info:negation_preview"_](i) = 0;
+    for (int i = 0; i < spec_.config["max_options"_]; ++i) {
+      state["info:negation_preview"_](i) = 0;
+      state["info:negation_zones"_](i) = 0;
+    }
     for (int i = 0; i < 8; ++i) state["info:chain_effect_slots"_](i) = 0;
     for (int i = 0; i < 4; ++i) state["info:chain_target_context"_](i) = 0;
     state["obs:global_"_][32] = uint8_t(1);

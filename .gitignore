@@ -1,5 +1,6 @@
 # ---------- 权重与训练产物 ----------
 *.flax_model
+!weights/u196.flax_model
 *.pt
 *.ptj
 *.msgpack

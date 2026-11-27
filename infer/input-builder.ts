@@ -113,6 +113,7 @@ function typeNames(t: number | undefined): string[] {
 
 export interface YgoinfCard {
   code: number;
+  public_prince_name?: boolean;
   location: string;
   sequence: number;
   controller: string;
@@ -130,6 +131,7 @@ export interface YgoinfCard {
 }
 
 export interface FieldSnapshot {
+  opponentSpellCounters?: number;
   cards: YgoinfCard[];
   myLp: number;
   opLp: number;
@@ -166,6 +168,7 @@ export async function buildFieldSnapshot(
   if (!ocgcore) throw new Error('no ocgcore');
 
   const cards: YgoinfCard[] = [];
+  let opponentSpellCounters = 0;
   outer: for (const pi of [0, 1]) {
     const player = (myDuelPos + pi) % 2;
     const controller = pi === 0 ? 'me' : 'opponent';
@@ -173,12 +176,15 @@ export async function buildFieldSnapshot(
       const res = await ocgcore.queryFieldCard({
         player,
         location: loc,
-        queryFlag: zoneQueryFlag(loc) | 0x10000,
+        queryFlag: zoneQueryFlag(loc) | 0x10000 | ((loc === LOC.MZONE || loc === LOC.SZONE) ? 0x20000 : 0),
         useCache: 0,
       });
       for (const q of res?.cards ?? []) {
         if (!q || q.empty) continue;
         const zone = q.location ?? loc;
+        if (pi === 1 && (zone === LOC.MZONE || zone === LOC.SZONE) && ((q.position ?? 0) & 5)) {
+          opponentSpellCounters += q.counters?.find(counter => counter.type === 1)?.count ?? 0;
+        }
         const privateZone = zone === LOC.HAND || (!revealed.length && (zone === LOC.DECK || zone === LOC.EXTRA));
         if (!(pi === 1 && privateZone) && q.overlayCards?.length) {
           const reader = await room.getCardReader();
@@ -204,8 +210,12 @@ export async function buildFieldSnapshot(
           if (cards.length === 160) break outer;
           continue;
         }
+        const prince = zone === LOC.MZONE && !!((q.position ?? 0) & 5) && q.alias === 19144623;
+        // The native tensor keeps the printed race even when Writer changes it.
+        const printed = prince && q.code ? readCardWithReader(await room.getCardReader(), q.code) : undefined;
         cards.push({
           code: q.code ?? 0,
+          ...(prince ? { public_prince_name: true } : {}),
           location: locationName(q.location ?? loc),
           sequence: q.sequence ?? 0,
           controller,
@@ -213,7 +223,7 @@ export async function buildFieldSnapshot(
           position: positionName(q.position),
           overlay_sequence: -1,
           attribute: pickBit(q.attribute, ATTR),
-          race: pickBit(q.race, RACE),
+          race: pickBit(printed?.race ?? q.race, RACE),
           // models.py: rank/link 也算 level
           level: q.rank || q.link || q.level || 0,
           counter: q.counters?.[0]?.count ?? 0,
@@ -241,6 +251,7 @@ export async function buildFieldSnapshot(
 
   return {
     cards,
+    opponentSpellCounters: Math.min(opponentSpellCounters, 3),
     myLp,
     opLp,
     turn: room.turnCount || 1,

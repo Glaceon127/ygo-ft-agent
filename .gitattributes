@@ -18,6 +18,7 @@
 
 # 二进制
 *.flax_model  binary
+*.npz         binary
 *.cdb         binary
 *.so          binary
 *.png         binary

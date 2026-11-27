@@ -77,6 +77,10 @@ class Pools(gym.Env):
 
 
 def public_features(obs,info,add_public,popular8,families=None,offers=None):
+    if 'negation_context' in info:
+        obs={**obs,'negation_context_':info['negation_context']}
+    if 'negation_zones' in info:
+        obs={**obs,'negation_zones_':info['negation_zones']}
     if 'negation_preview' in info:
         obs={**obs,'negation_preview_':info['negation_preview']}
     result=add_public(obs)
@@ -84,6 +88,7 @@ def public_features(obs,info,add_public,popular8,families=None,offers=None):
         result['popular8_counter_']=popular8(result,families,info['droll_event'],info.get('opening_ecclesia'),offers)
     else:
         result['popular8_counter_']=np.zeros_like(result['negation_blocked_'])
+    result.pop('counter_guide_blocked_',None)
     result.pop('negation_preview_',None)
     return result
 
@@ -100,8 +105,22 @@ def guide_loss(obs,logits,valid):
 def run():
     os.chdir(WORK)
     sys.path.insert(0,str(WORK))
-    masks=install()
-    add_public=make_masks()
+    from flax.serialization import msgpack_restore
+    from flax.traverse_util import flatten_dict
+    from _quick_timing_inputs import FEATURES as quick
+    from _passive_negation_inputs import FEATURES as passive, HEAD
+    import argparse
+    cli=argparse.ArgumentParser(add_help=False)
+    cli.add_argument('--checkpoint')
+    parent_path=cli.parse_known_args()[0].checkpoint
+    parent=msgpack_restore(Path(parent_path).read_bytes()) if parent_path else {}
+    params=parent.get('params',{})
+    timing='quick_timing_projection' in params
+    passive_width=params[HEAD].shape[1] if HEAD in params else 0
+    deadline='phase_deadline_calibration' in params
+    masks=install(initialize_deadline=deadline)
+    add_public=make_masks(for_supervision=True,learned_timing=timing,keep_field_rules=timing,
+                          passive_negation=bool(passive_width),phase_deadline=passive_width>len(passive))
     from _popular8_counter import labels_for
     ids={int(s.split()[0]):i for i,s in enumerate((WORK/'code_list.txt').read_text().splitlines(),1) if s.strip()}
     popular8=labels_for(ids,verified_only=True) if POPULAR8 else None
@@ -115,11 +134,17 @@ def run():
             spaces['joint_ids_']=gym.spaces.Box(0,65535,(n,),np.int32)
             spaces['negation_blocked_']=gym.spaces.Box(0,1,(n,),np.uint8)
             spaces['popular8_counter_']=gym.spaces.Box(0,1,(n,),np.uint8)
+            if timing:
+                spaces['quick_timing_']=gym.spaces.Box(0.,1.,(n,len(quick)),np.float32)
+            if passive_width:
+                spaces['passive_negation_']=gym.spaces.Box(0.,1.,(n,2,passive_width),np.float32)
             self.observation_space=gym.spaces.Dict(spaces)
         def reset(self,**kwargs):
             obs,info=self.env.reset(**kwargs)
             return self.features(obs,info),info
         def features(self,obs,info):
+            if deadline and info['negation_context'].shape[-1]!=27:
+                raise ValueError('Rebuild the native overlay for negation_context[26]')
             families=None
             self.offers={}
             if isinstance(self.env,Pools):
@@ -163,15 +188,26 @@ def run():
         hit=(obs['popular8_counter_'].any(-1)&main).reshape(2,len(OPP),-1)
         return hit[:,-len(HOT):,:].sum(axis=(0,2))
     active_pools=[]
+    deadline_windows=0
+    @jax.jit
+    def window_count(facts,main):
+        return (facts[:,:,0,-2].any(1)&main).sum()
+    def count_deadlines(facts,main):
+        nonlocal deadline_windows
+        deadline_windows+=int(window_count(facts,main))
     def training_env(args,seed,size,threads,**kwargs):
         pool=Pools(train,args,seed,size,threads,**kwargs)
         active_pools.append(pool)
         return pool
     def record(args,update):
+        nonlocal deadline_windows
         pool=active_pools[0]
         path=run_dir/(args.exp_name+'.samples.jsonl')
         with path.open('a') as f:
             row=dict(update=update,draws=pool.draws.tolist(),counter=pool.coverage.tolist())
+            if deadline:
+                row['learner_deadline_windows']=deadline_windows
+                deadline_windows=0
             if POPULAR8:
                 row['popular8_windows']=dict(zip(HOT,pool.hot_windows.tolist()))
                 row['popular8_offered_chosen']=pool.window_counts.copy()
@@ -195,7 +231,8 @@ def run():
         ('        ratios = reshape_time_series(ratios)','        ratios = reshape_time_series(jnp.where(switch_or_mains,ratios,1.0))'),
         ('    for update in range(1, args.num_updates + 2):','    for update in range(1, args.num_updates + 1):'),
         ('            cpu_action = np.array(action)','            cpu_action = np.array(action)\n            active_pools[0].coverage += np.asarray(joint_coverage(next_obs,main))'+
-         ('\n            active_pools[0].hot_windows += np.asarray(hot_coverage(next_obs,main))' if POPULAR8 else '')),
+         ('\n            active_pools[0].hot_windows += np.asarray(hot_coverage(next_obs,main))' if POPULAR8 else '')+
+         ('\n            count_deadlines(next_obs["passive_negation_"],main)' if deadline else '')),
         ('        rollout_time.append(time.time() - rollout_time_start)','        joint_record(args,update)\n        rollout_time.append(time.time() - rollout_time_start)'),
         ('        with open(path, "wb") as f:\n            f.write(flax.serialization.to_bytes(obj))','        tmp=str(path)+".tmp"\n        with open(tmp,"wb") as f: f.write(flax.serialization.to_bytes(obj))\n        os.replace(tmp,path)'),
     ):
@@ -203,10 +240,38 @@ def run():
     for signature in ('mask, num_steps=None)','mask, num_steps=dones.shape[0] // num_envs)'):
         marker='            '+signature+'\n\n        loss = jnp.where'
         src=replace(src,marker,'            '+signature+'\n        loss += joint_loss(obs,new_logits,mask)\n\n        loss = jnp.where')
-    train.__dict__.update(PublicFeatures=PublicFeatures,training_env=training_env,joint_guide=guide,joint_loss=guide_loss,
+    if deadline:
+        from _rehearsal import load_loss,load_material_loss,load_veiler_loss
+        bank=WORK/'ft_rehearsal'
+        train.rename_loss=load_loss(bank/'rename.npz')
+        train.material_loss=load_material_loss(bank)
+        train.veiler_loss=load_veiler_loss(bank/'veiler.npz')
+        for name in ('get_loss','get_advantage_loss'):
+            src=replace(src,'def '+name+'(\n        params, batch_stats,',
+                            'def '+name+'(\n        params, batch_stats, demo_step,')
+        for batch in ('minibatch','minibatch_t'):
+            call='loss_grad_fn(agent_state.params, agent_state.batch_stats, *'+batch+')'
+            src=replace(src,call,call.replace(', *',', agent_state.step, *'))
+        hook='        loss += joint_loss(obs,new_logits,mask)'
+        assert src.count(hook)==2
+        src=src.replace(hook,hook+'\n        loss += rename_loss(agent, variables, demo_step) + material_loss(agent, variables, demo_step) + veiler_loss(agent, variables, demo_step)')
+    train.__dict__.update(count_deadlines=count_deadlines,PublicFeatures=PublicFeatures,training_env=training_env,joint_guide=guide,joint_loss=guide_loss,
                           joint_coverage=jax.jit(coverage),hot_coverage=jax.jit(hot_coverage),active_pools=active_pools,joint_record=record,
                           joint_fairy=FAIRY,joint_dir=WORK.parent/"assets/joint_decks")
     exec(compile(src,train.__file__,'exec'),train.__dict__)
+    if deadline:
+        load=train.load_checkpoint_into
+        def checked_load(target,path):
+            result=load(target,path)
+            if Path(path).resolve()==Path(parent_path).resolve():
+                ref,actual=flatten_dict(parent),flatten_dict(result)
+                assert ref.keys()==actual.keys()
+                for key,a in ref.items():
+                    b=np.asarray(actual[key])
+                    assert a.shape==b.shape and a.dtype==b.dtype and a.tobytes()==b.tobytes(),key
+                print('Exact learner restore:',len(ref),'arrays',flush=True)
+            return result
+        train.load_checkpoint_into=checked_load
     train.main()
 
 

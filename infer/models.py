@@ -297,6 +297,7 @@ class Type(Enum):
 
 
 class Card(BaseModel):
+    public_prince_name: bool = False
     code: int = Field(
         ..., description='Card code from cards.cdb', examples=[23434538, 23995346]
     )

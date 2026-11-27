@@ -1,0 +1,133 @@
+{
+  "checkpoint": "u196",
+  "parent": "offline v8",
+  "sha256": "afa514db2fa6a5ac49a7b3e6156be33223621eb754fce7be1cb14a483c7a9f39",
+  "parent_sha256": "02dee524cb38183b52f90e1d59710c0d66a7d667d3d93a298ffbd27ec9d5de5c",
+  "bytes": 77300358,
+  "global_step": 85798272,
+  "updates": 196,
+  "environment_steps": 1003520,
+  "finite_arrays": 167,
+  "windbot": {
+    "seeds_per_opponent": 25,
+    "seats_per_seed": 2,
+    "wins_v8": {
+      "Neko": 31,
+      "Swordsoul": 28
+    },
+    "wins_u196": {
+      "Neko": 33,
+      "Swordsoul": 31
+    },
+    "matchups": {
+      "Swordsoul": {
+        "seat_wins_v8_u196": {
+          "second": [
+            13,
+            14
+          ],
+          "first": [
+            15,
+            17
+          ]
+        },
+        "fallback_games_v8_u196": [
+          15,
+          9
+        ],
+        "both_win": 25,
+        "both_lose": 16,
+        "v8_only": 3,
+        "u196_only": 6,
+        "paired_difference": 0.06,
+        "seed_bootstrap_95": [
+          -0.06,
+          0.18
+        ]
+      },
+      "Neko": {
+        "seat_wins_v8_u196": {
+          "second": [
+            15,
+            15
+          ],
+          "first": [
+            16,
+            18
+          ]
+        },
+        "fallback_games_v8_u196": [
+          14,
+          15
+        ],
+        "both_win": 30,
+        "both_lose": 16,
+        "v8_only": 1,
+        "u196_only": 3,
+        "paired_difference": 0.04,
+        "seed_bootstrap_95": [
+          -0.04,
+          0.12
+        ]
+      }
+    },
+    "combined": {
+      "paired_difference": 0.05,
+      "seed_bootstrap_95": [
+        -0.02,
+        0.11
+      ]
+    }
+  },
+  "mirror": {
+    "wins": 126,
+    "games": 256,
+    "seat_wins": [
+      62,
+      64
+    ],
+    "paired_bootstrap_95": [
+      0.453125,
+      0.53125
+    ],
+    "reasons": {
+      "1": 256
+    }
+  },
+  "veiler_and_passive_v8": {
+    "battle_windows": 108,
+    "battle_correct": 105,
+    "correct_target_if_activated": 108,
+    "correct_activation_and_target": 105,
+    "reserve_windows": 108,
+    "reserve_correct": 108,
+    "neutral_windows": 108,
+    "unlock_windows": 18,
+    "unlock_correct": 13,
+    "unlock_correct_target_if_activated": 18,
+    "unlock_correct_activation_and_target": 13,
+    "backup_windows": 18
+  },
+  "veiler_and_passive_u196": {
+    "battle_windows": 108,
+    "battle_correct": 96,
+    "correct_target_if_activated": 108,
+    "correct_activation_and_target": 96,
+    "reserve_windows": 108,
+    "reserve_correct": 108,
+    "neutral_windows": 108,
+    "unlock_windows": 18,
+    "unlock_correct": 12,
+    "unlock_correct_target_if_activated": 18,
+    "unlock_correct_activation_and_target": 12,
+    "backup_windows": 18
+  },
+  "prior_windows_v8": {
+    "total": 110,
+    "correct": 109
+  },
+  "prior_windows_u196": {
+    "total": 110,
+    "correct": 108
+  }
+}

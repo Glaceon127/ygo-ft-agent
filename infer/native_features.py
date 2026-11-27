@@ -58,13 +58,18 @@ def extra_inputs(context, cards, actions, size):
                 val=combat(other)
                 f[21 if atk>val else 22 if atk==val else 23]+=np.float32(1/7)
     result = {'chain_':chain,'chain_effect_':slots,'battle_':battle}
+    if 'negation_context' in context:
+        result['negation_context_'] = np.asarray(context['negation_context'], dtype=np.uint8)
     offered = context.get('negation_preview', {})
     if offered:
         preview = np.zeros(size,np.uint8)
+        zones = np.zeros(size,np.uint8)
         for i, action in enumerate(actions[:size]):
-            if action.act.value == 'activate' and action.msg.value in ('select_chain','select_effectyn'):
+            if action.act.value == 'activate' and action.msg.value in ('select_chain','select_effectyn','select_idlecmd'):
                 value = offered.get(str(action.response))
+                zones[i] = offered.get(f'zones_{action.response}', 0)
                 if value in (1,2):
                     preview[i] = value
         result['negation_preview_'] = preview
+        result['negation_zones_'] = zones
     return result

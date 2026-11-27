@@ -96,7 +96,8 @@ def labels_for(ids, verified_only=False):
         source=top[:,2].astype(int)*256+top[:,3]
         effect=obs['chain_effect_'][batch,last]
         action_id=menu[...,1].astype(int)*256+menu[...,2]
-        offer=(menu[...,3]==2)&(menu[...,4]==8)&(menu[...,0]!=0)&~obs['negation_blocked_'].astype(bool)
+        guide_blocked=obs.get('counter_guide_blocked_',obs['negation_blocked_'])
+        offer=(menu[...,3]==2)&(menu[...,4]==8)&(menu[...,0]!=0)&~guide_blocked.astype(bool)
         window=(obs['global_'][:,7]==0)&(top[:,0]!=0)&(top[:,1]==1)&(top[:,8]==0)
         for family,cid,slot,zone,responses,requires_monster in scopes:
             rows=window&(source==cid)&(top[:,9]==zone)&(effect==slot)

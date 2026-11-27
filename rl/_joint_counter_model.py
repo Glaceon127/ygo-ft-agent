@@ -1,9 +1,10 @@
-"""Joint counter inputs and optional actor heads used by the u586/u1172 checkpoints."""
+"""Joint counter inputs and optional timing and negation heads."""
 from pathlib import Path
 
 import numpy as np
 
 from _field_negation_rule import FieldNegationRule
+from _counter_guide_rule import CounterGuideRule
 
 WORK = Path(__file__).resolve().parent
 SWORD = (20001443, 55273560, 56465981)
@@ -15,10 +16,18 @@ def replace(source, before, after):
     return source.replace(before,after)
 
 
-def make_masks(candidate_guides=False):
+def make_masks(candidate_guides=False, *, learned_timing=False, keep_field_rules=False, for_supervision=False,
+               passive_negation=False, phase_deadline=False):
     ids={int(line.split()[0]):i for i,line in enumerate((WORK/'code_list.txt').read_text().splitlines(),1) if line.strip()}
     sword_slots = {20001443: 1, 55273560: 1, 56465981: 1}
     negation=FieldNegationRule(ids,sword_slots,candidate_guides)
+    guides=CounterGuideRule(ids,sword_slots,candidate_guides)
+    if learned_timing:
+        from _quick_timing_inputs import QuickTimingInputs
+        timing_inputs = QuickTimingInputs(ids, WORK / 'ft_counter_data/quick_costs.json')
+    if passive_negation:
+        from _passive_negation_inputs import PassiveNegationInputs
+        passive_inputs=PassiveNegationInputs(ids,WORK/'ft_counter_data/passive_effects.json',phase_deadline)
     def decode(x, offset):
         return x[...,offset].astype(np.int32)*256+x[...,offset+1]
     def masks(obs):
@@ -52,14 +61,25 @@ def make_masks(candidate_guides=False):
         sword=np.stack([act&(kind==2)&(source==ids[c])&(slot==sword_slots[c])&
                          (story|(imperm if n==0 else ash&~droll[:,None]))
                          for n,c in enumerate(SWORD)],axis=-1)
-        blocked=negation.blocked(obs)
+        if learned_timing:
+            obs = {**obs, 'quick_timing_': timing_inputs(obs)}
+        if passive_negation:
+            obs={**obs,'passive_negation_':passive_inputs(obs)}
+        if learned_timing and not keep_field_rules:
+            blocked = np.zeros(menu.shape[:2], dtype=bool)
+        else:
+            blocked=negation.blocked(obs)
         flags=np.concatenate((field[...,None],popular[...,None],sword),axis=-1)
-        return {**obs,'joint_counter_':flags & ~blocked[...,None], 'negation_blocked_':blocked,
+        guide_blocked=guides.blocked(obs) if for_supervision or flags.any() else blocked
+        obs={k:v for k,v in obs.items() if k not in ('negation_context_', 'negation_zones_')}
+        if for_supervision:
+            obs['counter_guide_blocked_']=guide_blocked | blocked
+        return {**obs,'joint_counter_':flags & ~(guide_blocked | blocked)[...,None], 'negation_blocked_':blocked,
                 'joint_ids_':card}
     return masks
 
 
-def install():
+def install(*, initialize_deadline=False):
     from ygoai.rl.jax import agent
     def masks(obs):
         flags=obs['joint_counter_'].astype(bool)
@@ -83,9 +103,37 @@ def install():
                 '''        if self.joint_counter:
             bias = self.param("sword_bias", nn.initializers.zeros, (3,))
             logits = logits + jnp.sum(sword*bias,axis=-1)
+            if "quick_timing_" in x:
+                facts = x["quick_timing_"].astype(jnp.float32)
+                state = f_state_r.astype(jnp.float32)
+                state = jnp.concatenate((state, jnp.ones_like(state[:,:1])), axis=-1)
+                projection = self.param("quick_timing_projection", nn.initializers.zeros,
+                                        (facts.shape[-1], state.shape[-1]))
+                # This head was trained on activate/pass pairs. Leave target
+                # ranking and unrelated activations to the existing actor.
+                timing_offer = (facts[...,0] > 0) & ((facts[...,5] > 0) | (facts[...,11] > 0))
+                delta = jnp.einsum("baf,bf->ba", facts, state @ projection.T)
+                logits += jnp.where(timing_offer, delta, 0.)
+            if "passive_negation_" in x:
+                facts = x["passive_negation_"].astype(jnp.float32)
+                state = f_state_r.astype(jnp.float32)
+                state = jnp.concatenate((state, jnp.ones_like(state[:,:1])), axis=-1)
+                projection = self.param("passive_negation_projection", nn.initializers.zeros,
+                                        (*facts.shape[-2:], state.shape[-1]))
+                context = jnp.einsum("bw,sfw->bsf", state, projection)
+                logits += jnp.einsum("basf,bsf->ba", facts, context)
+                if self.has_variable("params", "phase_deadline_calibration") or (joint_init_deadline and self.is_initializing()):
+                    calibration = self.param("phase_deadline_calibration", nn.initializers.zeros, (3,))
+                    deadline, locked = facts[:,:,0,-2], facts[:,:,0,-1]
+                    passes = x["actions_"][:,:,4] == 9
+                    pass_score = jnp.take_along_axis(logits, jnp.argmax(passes, axis=1)[:,None], axis=1)
+                    prior = jnp.clip(logits - pass_score, -40., 40.)
+                    shift = calibration[0]*deadline + calibration[1]*locked + calibration[2]*deadline*prior
+                    logits += jnp.where(deadline.astype(bool) & passes.any(axis=1)[:,None], shift, 0.)
             logits = jnp.where(x["negation_blocked_"], -1e30, logits)
         if self.q_head:
             return rstate, logits, valid''')
     agent.__dict__['joint_masks']=masks
+    agent.__dict__['joint_init_deadline']=initialize_deadline
     exec(compile(src,agent.__file__,'exec'),agent.__dict__)
     return masks

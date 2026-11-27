@@ -471,7 +471,9 @@ def float_transform(x):
 def encode_card(card: Card):
     x = np.zeros(N_CARD_FEATURES, dtype=np.uint8)
 
-    x[0:2] = int_transform(get_code_id(card.code))
+    prince = (card.public_prince_name and card.location == Location.mzone and card.overlay_sequence == -1
+              and card.position in (Position.faceup_attack, Position.faceup_defense, Position.faceup))
+    x[0:2] = int_transform(get_code_id(19144623 if prince else card.code))
 
     x[2] = location_to_id[card.location]
     if card.location in [Location.mzone, Location.szone, Location.grave]:
@@ -551,7 +553,7 @@ def encode_cards(cards: List[Card], context=None):
             spec_infos[spec] = (i + 1, 0)
             continue
         x[i] = encode_card(card)
-        spec_infos[spec] = (i + 1, get_code_id(card.code))
+        spec_infos[spec] = (i + 1, int(x[i,0]) * 256 + int(x[i,1]))
     if hand_start is not None:
         for slot,code in slots.items():
             if code in names:
@@ -1078,7 +1080,8 @@ def encode_legal_actions(actions: List[LegalAction], spec_infos, size=MAX_ACTION
     for i, action in enumerate(actions):
         card_index, card_id = find_spec_info(spec_infos, action.spec)
         action.card_index = card_index
-        if action.card_id == 0 or action.spec.startswith('oh'):
+        if (action.card_id == 0 or action.spec.startswith('oh') or
+                (action.spec.startswith(('m','om')) and card_id == code_to_id.get(19144623))):
             action.card_id = card_id
         x[i] = encode_action(action)
     return x

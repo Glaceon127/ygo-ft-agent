@@ -13,7 +13,7 @@
 | 局面与合法动作 | 卡牌、全局、动作、历史动作每行分别为 41、23、12、14 列 | 扩展为 **73、33、14、16 列**。卡牌和动作增加效果语义、目标关系等信息，显式跟踪公开手牌、连锁中的发动者和已无效状态。[环境编码](env/ygopro.h) · [公开手牌](env/public_hand.h) |
 | 连锁与战斗决策 | 策略从局面与历史编码选择引擎给出的动作 | 增加 **8 × 13** 连锁表、公开效果槽和每个候选动作的 **24 项**战斗特征。当公开描述能映射到效果槽时，可区分同卡的不同发动效果。攻击决策可直接使用公开攻守差、表示形式及候选目标信息。[策略网络](rl/agent.py) · [战斗特征](env/battle_features.h) |
 | 妖精传姬展开 | 通用对局回报及自对弈训练 | 从观测统计讲述者、编写者等终端，并用引擎事件追踪威凯特送墓后终端登场、故事尾巴堆墓后同回合进入魔陷区。训练可分别调节这些奖励，并对自损攻击、错误使用手坑等动作计数。评估区分终端登场、临时怪兽和终端留场。[奖励](rl/shaping.py) · [评估](rl/battle.py) |
-| 跨卡组打断 | 上游支持不同牌表与模型互战 | 新增可复现的攻略窗口、锁鸟检索后窗口、场上无效的发动与目标约束。在混合对局中对攻略认可的合法应答加入辅助损失，保留整局 PPO 更新。[攻略映射](rl/_popular8_counter.py) · [目标筛选](rl/_field_negation_rule.py) · [联合训练](rl/train_counters.py) |
+| 跨卡组打断 | 上游支持不同牌表与模型互战 | 新增可复现的攻略窗口、锁鸟检索后窗口和场上无效的合法目标预检。模型在混合场面衡量打断发动者与处理其他威胁的价值，混合对局训练另对攻略认可的应答加入辅助损失。[攻略映射](rl/_popular8_counter.py) · [攻略监督](rl/_counter_guide_rule.py) · [联合训练](rl/train_counters.py) |
 | G 系手坑 | 对局引擎处理卡片效果与抽牌 | 根据引擎的抽牌原因追踪增殖的 G、山雀、水母和猫。当己方在自己回合让对方因这些效果实际抽牌，每张扣 **0.01**。终端和胜负回报继续参与权衡，未送抽的特殊召唤没有此项扣分。[抽牌归因](env/ygopro.cpp) · [奖励计算](rl/train_counters.py) |
 | 客户端对局与核验 | ygoinf 已支持通过 HTTP 预测动作 | 补齐 srvpro2 协议消息到训练观测的映射，包括连锁发动地点、目标、战斗候选和多选菜单。模型玩家插件将预测转换回合法响应，记录重试、空预测、兜底和终局原因，支持导出 YRP 回放。[推理编码](infer/native_features.py) · [模型玩家插件](infer/index.ts) |
 
@@ -21,7 +21,7 @@
 
 ## 跨卡训练怎样使用攻略
 
-仓库内的打断规则覆盖 **Blitzclique、Rikka、Dracotail、Yummy、Witchcrafter、Invoked、Dark Magician、Branded** 八个系列，另保留相剑回归窗口。八系列打断条目来自 Master Duel Meta 攻略。每条可用规则关联系列、效果来源、发动地点或效果槽，再在引擎给出的合法应答里匹配。锁鸟使用检索结算后的窗口。泡影、效遮等效果还要核对目标是否仍是场上可选的发动者。[攻略来源](https://www.masterduelmeta.com/combos-and-counters#counters) · [规则来源索引](assets/counter/popular8_sources.json) · [原生引擎复现记录](assets/counter/popular8_extended_windows.json)
+仓库内的打断规则覆盖 **Blitzclique、Rikka、Dracotail、Yummy、Witchcrafter、Invoked、Dark Magician、Branded** 八个系列，另保留相剑回归窗口。八系列打断条目来自 Master Duel Meta 攻略，按系列、发动地点和效果槽匹配。锁鸟使用检索结算后的窗口。给泡影、效遮标注直接打断偏好时，还会核对发动者是否仍可被取为目标。模型可另选同场的持续威胁。[攻略来源](https://www.masterduelmeta.com/combos-and-counters#counters) · [规则来源索引](assets/counter/popular8_sources.json) · [原生引擎复现记录](assets/counter/popular8_extended_windows.json)
 
 学习方始终操作妖精传姬，分别在 P0 和 P1 的并行环境中采样。训练池混合本家镜像、四种 G、相剑及八系列对手。对手使用冻结的起点策略，部分对局引导它打出指定起动卡或 G，以便出现可以学习的决策。指南标签用于训练，模型可以在多个攻略允许的应答之间分配概率。整局应对能力另用专用 WindBot 检验。[训练牌表](assets/joint_decks) · [训练池与损失函数](rl/train_counters.py)
 
@@ -76,7 +76,7 @@ cd "$UP/scripts"
 JAX_PLATFORMS=cuda python serve_counters.py "${CHECKPOINT:?请设置模型文件的绝对路径}" --port 3000
 ```
 
-外部对局还需要配套的 srvpro2 和 WindBot。在 srvpro2 源码的 `plugins/model-player/` 放入本仓库 `infer/` 中的 TypeScript 文件及 `effect_tags.json`，重新构建插件，并设置 `MODEL_PLAYER_TAKEOVER=1`、`MODEL_PLAYER_NAME=model`、`MODEL_PLAYER_URL=http://127.0.0.1:3000`。由插件接管名为 `model` 的客户端。构建产物的插件目录需包含 `effect_tags.json`。如需导出回放，启动 srvpro2 时再设置 `MODEL_PLAYER_YRP=1`，可用 `MODEL_PLAYER_YRP_DIR` 指定输出目录。Yummy 对手使用 WindBot 参数 `Deck=Neko`，对应的牌表文件是 `AI_Neko.ydk`。[插件入口](infer/index.ts)
+外部对局还需要配套的 srvpro2 和 WindBot。在 srvpro2 源码的 `plugins/model-player/` 放入本仓库 `infer/` 中的 TypeScript 文件及 `effect_tags.json`、`quick_effects.json`，重新构建插件，并设置 `MODEL_PLAYER_TAKEOVER=1`、`MODEL_PLAYER_NAME=model`、`MODEL_PLAYER_URL=http://127.0.0.1:3000`。由插件接管名为 `model` 的客户端。构建产物的插件目录需包含这两个 JSON 文件。如需导出回放，启动 srvpro2 时再设置 `MODEL_PLAYER_YRP=1`，可用 `MODEL_PLAYER_YRP_DIR` 指定输出目录。Yummy 对手使用 WindBot 参数 `Deck=Neko`，对应的牌表文件是 `AI_Neko.ydk`。[插件入口](infer/index.ts)
 
 **继续训练。** 将 `START_STEP` 设为起点模型对应的全局步数，将 `TRAIN_STEPS` 设为本次计划增加的环境步数。启动器会重新初始化优化器，在终端实时输出日志，并将 TensorBoard 事件、窗口统计及检查点保存到本次运行目录。[训练启动器](scripts/launch/train_joint.sh)
 
@@ -85,5 +85,7 @@ cd "$UP/scripts"
 bash "$FT/scripts/launch/train_joint.sh" "${CHECKPOINT:?请设置模型文件的绝对路径}" \
   "${START_STEP:?请设置起始全局步数}" "${TRAIN_STEPS:?请设置本次训练预算}"
 ```
+
+从当前示例权重续训时，每个小批次都复习改名融合、素材取舍和效遮发动时机。效遮样本在普通战斗威胁与主要阶段结束窗口中分别抽取「发动」和「保留」。攻略打断仍由对局中的合法窗口触发，G 系抽牌按实际张数扣分。默认冻结起点权重作为对手，也可通过 `OPPONENT_CHECKPOINT` 指定固定对手。[专项损失](rl/_rehearsal.py)
 
 旧阶段的启动参数保存在 [历史训练脚本](scripts/launch)，基础观测表和塑形参数见 [观测说明](OBSERVATION.md)。检查旧实验时请保留对应的权重、牌表、卡号表和启动参数。
